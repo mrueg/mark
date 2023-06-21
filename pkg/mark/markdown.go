@@ -670,6 +670,10 @@ func CompileMarkdown(markdown []byte, stdlib *stdlib.Lib, path string, mermaidPr
 		util.Prioritized(cparser.NewConfluenceTagParser(), 199),
 	))
 
+	converter.Parser().AddOptions(parser.WithBlockParsers(
+		util.Prioritized(cparser.NewConfluenceTagBlockParser(), 199),
+	))
+
 	converter.Renderer().AddOptions(renderer.WithNodeRenderers(
 		util.Prioritized(confluenceRenderer, 100),
 	))

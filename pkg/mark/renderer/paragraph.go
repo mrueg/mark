@@ -2,6 +2,7 @@ package renderer
 
 import (
 	"github.com/yuin/goldmark/ast"
+	east "github.com/yuin/goldmark/extension/ast"
 	"github.com/yuin/goldmark/renderer"
 	"github.com/yuin/goldmark/renderer/html"
 	"github.com/yuin/goldmark/util"
@@ -25,7 +26,9 @@ func (r *ConfluenceParagraphRenderer) RegisterFuncs(reg renderer.NodeRendererFun
 
 func (r *ConfluenceParagraphRenderer) renderParagraph(w util.BufWriter, source []byte, n ast.Node, entering bool) (ast.WalkStatus, error) {
 	if entering {
-		if n.FirstChild().Kind() != ast.KindRawHTML {
+		switch n.FirstChild().Kind() {
+		case ast.KindRawHTML, east.KindTaskCheckBox:
+		default:
 			if n.Attributes() != nil {
 				_, _ = w.WriteString("<p")
 				html.RenderAttributes(w, n, html.ParagraphAttributeFilter)
@@ -35,7 +38,9 @@ func (r *ConfluenceParagraphRenderer) renderParagraph(w util.BufWriter, source [
 			}
 		}
 	} else {
-		if n.FirstChild().Kind() != ast.KindRawHTML {
+		switch n.FirstChild().Kind() {
+		case ast.KindRawHTML, east.KindTaskCheckBox:
+		default:
 			_, _ = w.WriteString("</p>")
 		}
 		_, _ = w.WriteString("\n")

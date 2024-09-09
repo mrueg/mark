@@ -59,6 +59,9 @@ func (c *ConfluenceExtension) Extend(m goldmark.Markdown) {
 		util.Prioritized(crenderer.NewConfluenceHeadingRenderer(c.DropFirstH1), 100),
 		util.Prioritized(crenderer.NewConfluenceImageRenderer(c.Stdlib, c, c.Path), 100),
 		util.Prioritized(crenderer.NewConfluenceParagraphRenderer(), 100),
+		util.Prioritized(crenderer.NewConfluenceTaskCheckBoxHTMLRenderer(), 100),
+		util.Prioritized(crenderer.NewConfluenceListItemRenderer(), 100),
+		util.Prioritized(crenderer.NewConfluenceListRenderer(), 90),
 		util.Prioritized(crenderer.NewConfluenceLinkRenderer(), 100),
 	))
 

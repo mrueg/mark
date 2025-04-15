@@ -1,6 +1,7 @@
 package mark_test
 
 import (
+	"context"
 	"os"
 	"path"
 	"path/filepath"
@@ -12,8 +13,8 @@ import (
 	"github.com/kovetskiy/mark/stdlib"
 	"github.com/kovetskiy/mark/util"
 	"github.com/stretchr/testify/assert"
-	"github.com/urfave/cli/v2"
-	"github.com/urfave/cli/v2/altsrc"
+	altsrc "github.com/urfave/cli-altsrc/v3"
+	"github.com/urfave/cli/v3"
 )
 
 func loadData(t *testing.T, filename, variant string) ([]byte, string, []byte) {
@@ -128,7 +129,7 @@ func TestCompileMarkdownStripNewlines(t *testing.T) {
 }
 
 func TestContinueOnError(t *testing.T) {
-	app := &cli.App{
+	cmd := &cli.Command{
 		Name:        "temp-mark",
 		Usage:       "test usage",
 		Description: "mark unit tests",
@@ -148,9 +149,9 @@ func TestContinueOnError(t *testing.T) {
 					return altsrc.NewTomlSourceFromFile(util.ConfigFilePath())
 				}
 			}),
-		EnableBashCompletion: true,
-		HideHelpCommand:      true,
-		Action:               util.RunMark,
+		EnableShellCompletion: true,
+		HideHelpCommand:       true,
+		Action:                util.RunMark,
 	}
 
 	filePath := filepath.Join("testdata", "batch-tests", "*.md")
@@ -162,6 +163,6 @@ func TestContinueOnError(t *testing.T) {
 		"--files", filePath,
 	}
 
-	err := app.Run(argList)
+	err := cmd.Run(context.TODO(), argList)
 	assert.NoError(t, err, "App should run without errors when continue-on-error is enabled")
 }

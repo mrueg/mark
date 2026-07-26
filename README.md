@@ -876,6 +876,11 @@ This is the hidden content.
 </details>
 ```
 
+### LaTeX & Math Formulas
+
+Optionally you can enable LaTeX / Math formula rendering via `--features="math"`.
+
+When enabled, inline math (`$e = mc^2$` or `\(e = mc^2\)`) and block math (`$$ \int_0^\infty e^{-x^2} dx = \frac{\sqrt{\pi}}{2} $$`, `\[ ... \]`, or fenced code blocks ````math ```` / ````latex ````) are automatically pre-rendered into high-resolution PNG image attachments and embedded as Confluence `<ac:image>` tags—requiring zero Confluence plugins or third-party Marketplace apps.
 ## Installation
 
 ### Homebrew

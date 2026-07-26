@@ -261,6 +261,22 @@ func (c *ConfluenceExtension) Extend(m goldmark.Markdown) {
 		))
 	}
 
+	// Add math / latex formula support if requested
+	if slices.Contains(c.MarkConfig.Features, "math") {
+		m.Parser().AddOptions(
+			parser.WithInlineParsers(
+				util.Prioritized(NewMathInlineParser(), 98),
+			),
+			parser.WithBlockParsers(
+				util.Prioritized(NewMathBlockParser(), 98),
+			),
+		)
+
+		m.Renderer().AddOptions(renderer.WithNodeRenderers(
+			util.Prioritized(crenderer.NewConfluenceMathRenderer(c.Stdlib, c), 100),
+		))
+	}
+
 	// Add confluence tag parser for <ac:*/> tags
 	m.Parser().AddOptions(parser.WithInlineParsers(
 		util.Prioritized(cparser.NewConfluenceTagParser(), 199),

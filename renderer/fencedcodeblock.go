@@ -131,6 +131,38 @@ func (r *ConfluenceFencedCodeBlockRenderer) renderFencedCodeBlock(writer util.Bu
 		lval = append(lval, line.Value(source)...)
 	}
 
+	if (lang == "math" || lang == "latex") && slices.Contains(r.MarkConfig.Features, "math") {
+		formula := strings.TrimSpace(string(lval))
+		att, err := ProcessMathPNG(formula, true)
+		if err != nil {
+			line, col := GetLineCol(source, node.Pos())
+			return ast.WalkStop, fmt.Errorf("line %d, col %d: math rendering failed: %v", line, col, err)
+		}
+		r.Attachments.Attach(att)
+
+		err = r.Stdlib.Templates.ExecuteTemplate(
+			writer,
+			"ac:image",
+			struct {
+				Align          string
+				Layout         string
+				OriginalWidth  string
+				OriginalHeight string
+				Width          string
+				Height         string
+				Title          string
+				Alt            string
+				Attachment     string
+				Url            string
+			}{
+				Align:      "center",
+				Attachment: att.Filename,
+				Title:      formula,
+			},
+		)
+		return ast.WalkContinue, err
+	}
+
 	if lang == "d2" && slices.Contains(r.MarkConfig.Features, "d2") {
 		attachment, err := d2.ProcessD2(title, lval, r.MarkConfig.D2Scale)
 		if err != nil {

@@ -302,6 +302,16 @@ For example, a file named `my_awesome-page.md` will have the title "My Awesome P
 
 These two options are mutually exclusive. If both flags are provided, `mark` will produce an error.
 
+### Title length
+
+Confluence takes a title of at most 255 characters, counted as UTF-16 code
+units, so an emoji counts as two. Mark checks the page title, however it was
+set, and the titles of the parents and folders it would create, after
+`--title-append-generated-hash` has added its hash. A document with a longer one
+fails the run, and a dry run, before anything is created, rather than
+partway through, once its parents exist. `--compile-only` does not check it,
+since it never reaches Confluence.
+
 ## Leaving a document unpublished
 
 A document can ask to be left out of a run:

@@ -135,7 +135,7 @@ func TestExportRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, out, result.Output)
 	assert.Equal(t, []string{"how-to", "install"}, result.Labels, "the result names the labels the headers do")
-	assert.Empty(t, result.DeclaredAttachments, "Markdown refers to its attachments without declaring them")
+	assert.Nil(t, result.DeclaredAttachments, "Markdown refers to its attachments without declaring them")
 
 	exported, err := os.ReadFile(out)
 	require.NoError(t, err)

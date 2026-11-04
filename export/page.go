@@ -273,15 +273,18 @@ func Page(ctx context.Context, api *confluence.API, cfg Config) (*Result, error)
 	var header string
 	var declared []string
 	if okf {
-		header, err = conceptHeader(page, pageURL(api, page), cfg.Generator, labels)
+		header, err = okfFrontMatter(page, pageURL(api, page), cmp.Or(cfg.Generator, "mark/unknown"), labels)
 	} else {
-		// A header naming a file that is not there fails the publish.
-		for _, name := range doc.Declared {
-			if !missing[name] {
-				declared = append(declared, name)
-			}
+		var h *pageHeaders
+		if h, err = headers(ctx, api, page, space, doc, labels, missing); err != nil {
+			return nil, err
 		}
-		header, err = headers(ctx, api, page, space, doc, labels, declared, spelling)
+		declared = h.Attachments
+		if spelling == MetadataFrontMatter {
+			header, err = h.frontMatter()
+		} else {
+			header, err = h.comments()
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -368,26 +371,26 @@ func findPage(ctx context.Context, api *confluence.API, cfg Config) (*confluence
 	return page, nil
 }
 
-// headers writes the metadata that publishes the document back to the page it
-// came from, spelled as MetadataComments or MetadataFrontMatter says.
+// headers gathers the metadata that publishes the document back to the page it
+// came from, for Page to write out as either spelling.
 func headers(
 	ctx context.Context,
 	api *confluence.API,
 	page *confluence.PageInfo,
 	space string,
 	doc *Document,
-	labels, declared []string,
-	spelling string,
-) (string, error) {
-	h := pageHeaders{Space: space, Title: page.Title, Labels: labels, Attachments: declared}
+	labels []string,
+	missing map[string]bool,
+) (*pageHeaders, error) {
+	h := &pageHeaders{Space: space, Title: page.Title, Labels: labels}
 
-	var err error
 	if page.Type == "blogpost" {
 		h.Type = "blogpost"
 	} else {
+		var err error
 		h.Parents, h.Folders, err = parents(ctx, api, page, space)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 	}
 
@@ -400,18 +403,14 @@ func headers(
 
 	h.ContentAppearance, h.Emoji = appearanceOf(ctx, api, page)
 
-	if spelling == MetadataFrontMatter {
-		return h.frontMatter()
+	for _, name := range doc.Declared {
+		// A header naming a file that is not there fails the publish.
+		if !missing[name] {
+			h.Attachments = append(h.Attachments, name)
+		}
 	}
-	return h.comments()
-}
 
-// conceptHeader is the OKF front matter of the concept page is exported as.
-func conceptHeader(page *confluence.PageInfo, address, generator string, labels []string) (string, error) {
-	if generator == "" {
-		generator = "mark/unknown"
-	}
-	return okfFrontMatter(page, address, generator, labels)
+	return h, nil
 }
 
 // pageLabels are the page's global labels, sorted, so that exporting a page
@@ -421,7 +420,10 @@ func pageLabels(ctx context.Context, api *confluence.API, page *confluence.PageI
 	if err != nil {
 		return nil, fmt.Errorf("unable to read the labels of page %s: %w", page.ID, err)
 	}
-	var names []string
+	if len(labels.Labels) == 0 {
+		return nil, nil
+	}
+	names := make([]string, 0, len(labels.Labels))
 	for _, label := range labels.Labels {
 		names = append(names, label.Name)
 	}

@@ -104,10 +104,10 @@ Body.
 	assert.Contains(t, body, "<!-- Include: fragment.md -->")
 }
 
-// TestUnknownHeaderIsRefused pins the fix for a misspelled header. The line
-// sits inside the header run, so it is taken out of the body whatever happens
-// next; logging the typo and publishing anyway meant a page silently lost its
-// title and the run still exited zero.
+// TestUnknownHeaderIsRefused covers a misspelled header. The line sits inside
+// the header run, so it is taken out of the body whatever happens next; logging
+// the typo and publishing anyway would silently lose the page's title, and the
+// run would still exit zero.
 func TestUnknownHeaderIsRefused(t *testing.T) {
 	_, _, err := extract(t, `<!-- Space: TEST -->
 <!-- Titel: Typo -->

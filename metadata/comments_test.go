@@ -9,11 +9,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestOrdinaryCommentIsNotAHeader is the regression this file exists for. Every
-// "<!-- word: text -->" parses as a header comment, so refusing an unrecognised
-// header meant refusing the document over a note the author left themselves.
-// TODO:, Author: and SPDX-License-Identifier: are in every second repository,
-// and a document carrying one stopped publishing at all.
+// TestOrdinaryCommentIsNotAHeader: every "<!-- word: text -->" parses as a
+// header comment, so refusing an unrecognised header would refuse the document
+// over a note the author left themselves. TODO:, Author: and
+// SPDX-License-Identifier: are in every second repository, and a document
+// carrying one would not publish at all.
 func TestOrdinaryCommentIsNotAHeader(t *testing.T) {
 	comments := []string{
 		"TODO: rewrite this page",
@@ -94,9 +94,10 @@ func TestMisspelledHeaderIsStillRefused(t *testing.T) {
 	}
 }
 
-// TestHeaderNamesAreMatchedWithoutCase: canonicalHeader matches against the
-// list rather than title-casing the key, which would make any comment a header
-// name, and it has to accept the spellings documents use.
+// TestHeaderNamesAreMatchedWithoutCase: canonicalHeader matches the key
+// against the list, ignoring case, rather than title-casing it, which would
+// make any comment a header name. Documents write "space:" and "TITLE:", and
+// those still have to match.
 func TestHeaderNamesAreMatchedWithoutCase(t *testing.T) {
 	meta, _, err := extract(t, "<!-- space: DOCS -->\n<!-- TITLE: Shouted -->\n\nBody.\n")
 
@@ -190,9 +191,9 @@ Still More Content
 }
 
 // TestMacroDirectiveAmongHeadersIsKept covers the other comment that shares the
-// header shape. The multi-line form survived the regression by accident -- its
-// continuation lines do not parse as headers, so the run ended before the error
-// -- which left the single-line form failing while the block form worked.
+// header shape, in both forms. The multi-line form's continuation lines do not
+// parse as headers, so it ends the run before any header check; only the
+// single-line form reaches the check that has to let a Macro through.
 func TestMacroDirectiveAmongHeadersIsKept(t *testing.T) {
 	block, body, err := extract(t, `<!-- Space: TEST -->
 <!-- Title: With Macro -->
@@ -240,8 +241,8 @@ Body.
 	assert.Contains(t, body, "<!-- ac:ignore -->")
 }
 
-// TestTypoIsStillRefusedBesideADirective pins that being lenient about
-// directives did not weaken the check that catches a misspelling.
+// TestTypoIsStillRefusedBesideADirective: being lenient about directives must
+// not weaken the check that catches a misspelling.
 func TestTypoIsStillRefusedBesideADirective(t *testing.T) {
 	_, _, err := extract(t, `<!-- Space: TEST -->
 <!-- Titel: misspelled -->

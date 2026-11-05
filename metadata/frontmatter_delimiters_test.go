@@ -16,10 +16,10 @@ func extractFrontMatterDocument(t *testing.T, document string) (*Meta, string, e
 }
 
 // TestFrontMatterOpensOnTheFirstLineOnly covers a document whose second line
-// is a dash rule. Front matter opens only on the first line: accepting a
-// delimiter anywhere else fails a page that opens with a heading and a
-// horizontal rule with "unterminated YAML front matter", and loses everything
-// above a repeat of the first line further down.
+// is a dash rule. Front matter opens on the first line only: opening it on the
+// second fails a page that starts with a heading and a horizontal rule with
+// "unterminated YAML front matter", and a body cut to wherever the first line
+// repeats loses everything above the repeat.
 func TestFrontMatterOpensOnTheFirstLineOnly(t *testing.T) {
 	for name, document := range map[string]string{
 		"heading then rule":  "# Heading\n---\n\nBody.\n",

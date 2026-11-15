@@ -30,6 +30,7 @@ import (
 	"strings"
 
 	"github.com/kovetskiy/mark/v17/internal/htmlblock"
+	"github.com/kovetskiy/mark/v17/internal/parsenote"
 	"github.com/kovetskiy/mark/v17/internal/syntax"
 	"github.com/yuin/goldmark/v2/ast"
 	"github.com/yuin/goldmark/v2/parser"
@@ -128,6 +129,10 @@ type admonitionState struct {
 	// body, which every later body line is read relative to.
 	contentIndent     int
 	contentHasStarted bool
+
+	// gap is whether a blank line came between the opening line and the
+	// body.
+	gap bool
 
 	// runEnd is where the closing run of a body level with the opening line
 	// ends, as the look-ahead found it at the first body line, and -1 for
@@ -321,6 +326,8 @@ func (b *admonitionParser) Continue(node ast.Node, reader text.Reader, pc parser
 	if first {
 		state.contentHasStarted = true
 		state.contentIndent = w
+	} else if !state.contentHasStarted {
+		state.gap = true
 	}
 
 	// An indented body ends at any closing run. One level with the opening
@@ -345,6 +352,14 @@ func (b *admonitionParser) Continue(node ast.Node, reader text.Reader, pc parser
 		state.node.lookAhead = lookAhead{asked: true, indent: state.indent, runEnd: state.runEnd}
 
 		if state.runEnd < 0 {
+			// Straight after the opening line, the line was written as the
+			// admonition's body, and its author is told that it is not. After
+			// a blank line it is what follows an admonition with no body, the
+			// way MkDocs writes one.
+			if !state.gap {
+				parsenote.StrandedBody(pc, node.Pos())
+			}
+
 			return parser.Close
 		}
 	}

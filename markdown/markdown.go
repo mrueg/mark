@@ -409,6 +409,8 @@ func CompileMarkdown(ctx context.Context, markdown []byte, stdlib *stdlib.Lib, p
 	// The page's set is handed on to the AST include and macro transformers,
 	// so that they see what the page's own fragments defined. The renderers
 	// keep drawing on the stdlib itself.
+	written := markdown
+
 	_, markdown, macroFiles, err := expandDirectives(path, opts, markdown, tmpl)
 	if err != nil {
 		return "", nil, err
@@ -435,6 +437,7 @@ func CompileMarkdown(ctx context.Context, markdown []byte, stdlib *stdlib.Lib, p
 
 	htmlOutput, replaced := sanitizeXMLChars(htmlOutput)
 	warnIllegalXMLChars(markdown, replaced, opts.Warnings)
+	warnStrandedBodies(written, markdown, ghAlertsExtension.notes.strandedBodies, opts.Warnings)
 
 	return htmlOutput, append(macroAttachments, ghAlertsExtension.Attachments...), nil
 }
@@ -505,6 +508,10 @@ type ConfluenceExtension struct {
 	Pipeline        *ctransformer.PipelineTransformer
 	Links           *ctransformer.LinkTransformer
 	AttachmentLinks *ctransformer.AttachmentTransformer
+
+	// notes takes what the block parsers found for the document's author
+	// out of the parse, for CompileMarkdown to report.
+	notes *parseNotes
 }
 
 // NewConfluenceExtension creates a new instance of the ConfluenceExtension, the
@@ -544,6 +551,7 @@ func newConfluenceExtension(ctx context.Context, stdlib *stdlib.Lib, path string
 		Pipeline:        pipeline,
 		Links:           ctransformer.NewLinkTransformer(opts.ResolveLink),
 		AttachmentLinks: ctransformer.NewAttachmentTransformer(opts.ResolveAttachment),
+		notes:           &parseNotes{},
 	}
 }
 
@@ -637,6 +645,12 @@ func (c *ConfluenceExtension) ParserOptions(cfg *parser.Config) []parser.Option 
 	))
 
 	opts = append(opts, featureParserOptions(c.Options.Features, cfg)...)
+
+	if c.notes != nil {
+		opts = append(opts, parser.WithASTTransformers(
+			util.Prioritized[parser.ASTTransformer](c.notes, 0),
+		))
+	}
 
 	opts = append(opts,
 		// Close the void elements, quote the attributes, escape the bare "&"s and

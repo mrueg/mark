@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kovetskiy/mark/v17/internal/parsenote"
 	cparser "github.com/kovetskiy/mark/v17/parser"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -552,6 +553,54 @@ func TestAdmonitionsWithoutABodyAreNotNested(t *testing.T) {
 			// Read to the last run once for each, a page this long takes
 			// minutes; read once, each line is read ahead at most twice.
 			assert.LessOrEqual(t, readAdmonitions(source).work.Visits, 2*strings.Count(source, "\n"))
+		})
+	}
+}
+
+// TestAdmonitionStrandedBodyIsRecorded: the parser records, for whoever
+// reports it, each admonition that ended at its opening line although the
+// line straight after it was written as its body: level with it, and with no
+// closing run ahead. An admonition with nothing after it in what holds it,
+// with a blank line after it, with an indented body or with a closing run is
+// not one.
+func TestAdmonitionStrandedBodyIsRecorded(t *testing.T) {
+	tests := []struct {
+		name   string
+		source string
+		lines  []int
+	}{
+		{name: "unindented line straight after", source: "!!! tip\nbody\n\nlater\n", lines: []int{1}},
+		{name: "each of two", source: "text\n\n!!! tip\nbody\n\n!!! note \"T\"\nmore\n", lines: []int{3, 6}},
+		{name: "in a list item", source: "- one\n- !!! note\n  in the item\n", lines: []int{2}},
+		{name: "in a blockquote", source: "> text\n>\n> !!! note\n> quoted\n", lines: []int{3}},
+		{
+			name:   "the outer of two, the inner indented and closed by the only run",
+			source: "!!! note \"outer\"\nintro\n!!! tip \"inner\"\n    b\n!!!\n\nafter\n",
+			lines:  []int{1},
+		},
+		{name: "the outer of two with one run", source: "!!! note\na\n!!! tip\nb\n!!!\nc\n", lines: []int{1}},
+
+		{name: "nothing after it", source: "!!! note \"T\"\n"},
+		{name: "blank lines after it", source: "!!! note \"T\"\n\n"},
+		{name: "a blank line, then text", source: "!!! note \"T\"\n\ntext\n"},
+		{name: "the next list item after it", source: "- !!! note\n- next\n"},
+		{name: "indented body", source: "!!! note\n    body\nafter\n"},
+		{name: "closed by a run", source: "!!! note\nbody\n!!!\nafter\n"},
+		{name: "a run straight after it", source: "!!! note\n!!!\nafter\n"},
+		{name: "a line indented less than it", source: "  !!! note\nbody\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pc := parser.NewContext()
+			admonitionBlocks.Parse([]byte(tt.source), parser.WithContext(pc))
+
+			var lines []int
+			for _, at := range parsenote.StrandedBodies(pc) {
+				lines = append(lines, 1+strings.Count(tt.source[:at], "\n"))
+			}
+
+			assert.Equal(t, tt.lines, lines)
 		})
 	}
 }

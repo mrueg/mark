@@ -542,6 +542,21 @@ A `!!!` line inside a fenced code block, a `<pre>` block or an HTML comment is
 that block's text. After any other HTML, such as `</details>` or a `<div>`, it
 closes the admonition.
 
+Lines written straight after the opening line, neither indented nor ended by a
+closing line, are published after the box:
+
+```markdown
+!!! note "Remember"
+This paragraph follows the box, and mark warns about it.
+```
+
+mark used to publish them in the box when the document, list item or
+blockquote ended with them, so it [warns](publishing.md#reporting-what-a-run-did)
+about each such admonition, with its line: an `admonition-body` warning in the
+run report. Indent the lines to put them in the box, or end them with a line of
+`!!!`. After a blank line they are taken for what follows an admonition that
+has no body, and nothing is said.
+
 ## HTML Details/Summary Macro
 
 Standard HTML `<details>` and `<summary>` tags are converted to native

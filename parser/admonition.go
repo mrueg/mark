@@ -396,36 +396,24 @@ func hasAdmonitionClosingRun(line []byte, w int, pos int, state *admonitionState
 	return true, 0
 }
 
-// htmlBlockKind returns the kind of HTML block that line, without its
-// indentation, starts when it is one of CommonMark's first five, the ones
-// that run on over blank lines, and 0 for any other line.
-func htmlBlockKind(line []byte) ast.HTMLBlockKind {
-	switch {
-	case bytes.HasPrefix(line, []byte("<!--")):
-		return ast.HTMLBlockKind2
-	case bytes.HasPrefix(line, []byte("<![CDATA[")):
-		return ast.HTMLBlockKind5
-	case bytes.HasPrefix(line, []byte("<?")):
-		return ast.HTMLBlockKind3
-	case len(line) > 2 && line[0] == '<' && line[1] == '!' && isASCIILetter(line[2]):
-		return ast.HTMLBlockKind4
+// htmlBlocks reads where an HTML block starts, for the look-ahead.
+var htmlBlocks = parser.NewHTMLBlockParser()
+
+// htmlBlockStart returns the kind of HTML block that line, without its
+// indentation, starts where no paragraph is open, and 0 for a line that
+// starts none: goldmark's own reading of the line, in a context with no
+// block open.
+func htmlBlockStart(line []byte, pc parser.Context) ast.HTMLBlockKind {
+	if line[0] != '<' {
+		return 0
 	}
 
-	for _, tag := range []string{"<pre", "<script", "<style", "<textarea"} {
-		if len(line) < len(tag) || !bytes.EqualFold(line[:len(tag)], []byte(tag)) {
-			continue
-		}
-
-		if rest := line[len(tag):]; len(rest) == 0 || util.IsSpace(rest[0]) || rest[0] == '>' {
-			return ast.HTMLBlockKind1
-		}
+	node, _ := htmlBlocks.Open(nil, text.NewReader(line, text.IdentityDecoder), pc)
+	if block, ok := node.(*ast.HTMLBlock); ok {
+		return block.HTMLBlockKind
 	}
 
 	return 0
-}
-
-func isASCIILetter(c byte) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 // closingRuns is what one parse has read ahead about the closing runs of its
@@ -441,6 +429,10 @@ type closingRuns struct {
 	// of an admonition ends, or -1, so that a document of admonitions is not
 	// read to its last run once for each.
 	ends map[int]int
+
+	// blocks is a context with no block open, to ask goldmark's parsers what
+	// a line starts.
+	blocks parser.Context
 }
 
 // closingRunsKey holds the *closingRuns of the document being parsed.
@@ -451,7 +443,7 @@ func documentClosingRuns(pc parser.Context, source []byte) *closingRuns {
 		return runs
 	}
 
-	runs := &closingRuns{last: -1, ends: map[int]int{}}
+	runs := &closingRuns{last: -1, ends: map[int]int{}, blocks: parser.NewContext()}
 
 	for start := 0; start < len(source); {
 		end := lineEnd(source, start)
@@ -590,6 +582,16 @@ func (b *bodyLines) findClosingRun(start int, length int) int {
 		fenceLength int
 		html        ast.HTMLBlockKind
 
+		// markup is whether the last line was in an HTML block that ends at
+		// a blank line, such as a <div>: an opening line there opens
+		// nothing, while a run still closes. soft is whether the code or
+		// HTML block the last line was in started in such a block, of which
+		// it is text, and so ends with it.
+		markup, soft bool
+
+		// blank is whether no line of text came since the last blank line.
+		blank = true
+
 		// spare is where the last run ends that closed an admonition opened
 		// by a shorter run than this one and is long enough for this one, or
 		// -1.
@@ -606,8 +608,15 @@ func (b *bodyLines) findClosingRun(start int, length int) int {
 		}
 
 		if util.IsBlank(line) {
+			if blank, markup = true, false; soft {
+				soft, html, fenceLength = false, 0, 0
+			}
+
 			continue
 		}
+
+		afterBlank := blank
+		blank = false
 
 		w, pos := util.IndentWidth(line, 0)
 		if w < b.indent {
@@ -671,18 +680,24 @@ func (b *bodyLines) findClosingRun(start int, length int) int {
 			}
 		}
 
-		kind := htmlBlockKind(line)
+		kind := htmlBlockStart(line, b.runs.blocks)
 
 		switch {
 		case (line[0] == '`' || line[0] == '~') && run >= 3 && (line[0] == '~' || bytes.IndexByte(line[run:], '`') < 0):
-			fence, fenceLength = line[0], run
+			fence, fenceLength, soft = line[0], run, markup
+		case kind >= ast.HTMLBlockKind6:
+			// One of the last kind cannot interrupt a paragraph, and only
+			// after a blank line is none known to be open.
+			markup = markup || kind == ast.HTMLBlockKind6 || afterBlank
 		case kind != 0:
 			if !htmlblock.Closes(kind, line) {
-				html = kind
+				html, soft = kind, markup
 			}
 		case deeper || line[0] != '!' || run < 3:
 		case !bare:
-			opened = run
+			if !markup {
+				opened = run
+			}
 		case above > 0 && run >= above:
 			// It closes the admonition with the indented body above it,
 			// unless it turns out to be the last run this one could have.

@@ -343,6 +343,31 @@ func TestAdmonitionBodyIsIndentedOrClosed(t *testing.T) {
 			want:   []string{"!note", "  HTMLBlock", "  Paragraph:x", "Paragraph:after"},
 		},
 		{
+			name:   "an opening line in an HTML block that ends at a blank line opens nothing",
+			source: "!!! note \"T\"\n<div>\n!!! tip \"in the block\"\n</div>\n\ntext\n!!!\nafter\n",
+			want:   []string{"!note", "  HTMLBlock", "  Paragraph:text", "Paragraph:after"},
+		},
+		{
+			name:   "an opening line in a block opened by a tag alone on its line opens nothing",
+			source: "!!! note \"T\"\n\n<span>\n!!! tip \"in the block\"\n</span>\n\n!!!\nafter\n",
+			want:   []string{"!note", "  HTMLBlock", "Paragraph:after"},
+		},
+		{
+			name:   "a tag alone on a line of a paragraph opens no block",
+			source: "!!! note \"T\"\ntext\n<span>\n!!! tip \"U\"\nb\n!!!\nc\n!!!\nafter\n",
+			want:   []string{"!note", "  Paragraph:text\n<span>", "  !tip", "    Paragraph:b", "  Paragraph:c", "Paragraph:after"},
+		},
+		{
+			name:   "a code fence in an HTML block that ends at a blank line is its text",
+			source: "!!! note \"T\"\n<div>\n```\n</div>\n\ntext\n!!!\nafter\n",
+			want:   []string{"!note", "  HTMLBlock", "  Paragraph:text", "Paragraph:after"},
+		},
+		{
+			name:   "an unclosed comment in an HTML block that ends at a blank line is its text",
+			source: "!!! note \"T\"\n<div>\n<!--\n</div>\n\ntext\n!!!\nafter\n",
+			want:   []string{"!note", "  HTMLBlock", "  Paragraph:text", "Paragraph:after"},
+		},
+		{
 			name:   "a run straight after a nested indented body closes that one",
 			source: "!!! note \"outer\"\nintro\n!!! tip \"inner\"\n    b\n!!!\n\nafter\n",
 			want:   []string{"!note", "Paragraph:intro", "!tip", "  Paragraph:b", "Paragraph:after"},

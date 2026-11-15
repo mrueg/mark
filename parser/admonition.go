@@ -670,9 +670,10 @@ func (b *bodyLines) findClosingRun(start int, length int) int {
 			// The admonition opened above has its body here. With a closing
 			// run it holds the lines up to it; with none it ended at its
 			// opening line, and neither does this one have a run when it
-			// needs one as long.
+			// needs one as long. A list item its body opened with ended with
+			// it.
 			if end := b.closingRun(lineStart, nested); end >= 0 {
-				start = end
+				start, item = end, 0
 
 				continue
 			} else if length >= nested {

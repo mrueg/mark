@@ -368,6 +368,14 @@ func TestAdmonitionBodyIsIndentedOrClosed(t *testing.T) {
 			want:   []string{"!note", "  HTMLBlock", "  Paragraph:text", "Paragraph:after"},
 		},
 		{
+			name:   "a code block indented like the list item a nested, closed body opened with",
+			source: "!!! note \"outer\"\n!!! tip \"inner\"\n1. item\n!!!\n   ```\n   !!!\n```\nmore\n!!!\nafter\n",
+			want: []string{
+				"!note", "  !tip", "    List", "      ListItem", "        Paragraph:item", "  CodeBlock", "  Paragraph:more",
+				"Paragraph:after",
+			},
+		},
+		{
 			name:   "a run straight after a nested indented body closes that one",
 			source: "!!! note \"outer\"\nintro\n!!! tip \"inner\"\n    b\n!!!\n\nafter\n",
 			want:   []string{"!note", "Paragraph:intro", "!tip", "  Paragraph:b", "Paragraph:after"},

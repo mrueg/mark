@@ -521,13 +521,15 @@ func closingRunAhead(reader text.Reader, pc parser.Context, indent int, length i
 	_, segment := reader.PeekLine()
 	start := bytes.LastIndexByte(source[:segment.Start], '\n') + 1
 
+	// The columns of a tab the containers took only part of are indentation.
+	prefix := untabbed(source[start:segment.Start])
+	prefix = prefix[:max(0, len(prefix)-segment.Padding)]
+
 	body := bodyLines{
-		source:  source,
-		prefix:  source[start:segment.Start],
-		padding: segment.Padding,
-		column:  reader.LineOffset() + segment.Padding,
-		indent:  indent,
-		runs:    documentClosingRuns(pc, source),
+		source: source,
+		prefix: prefix,
+		indent: indent,
+		runs:   documentClosingRuns(pc, source),
 	}
 
 	return body.closingRun(start, length)
@@ -540,11 +542,9 @@ type bodyLines struct {
 	source []byte
 
 	// prefix is what the list items and blockquotes took off the first body
-	// line, padding the columns of a tab they took only part of, which count
-	// as indentation, and column where the line starts after them.
-	prefix  []byte
-	padding int
-	column  int
+	// line, a blank for each column of a tab: a later line may spell the same
+	// columns with other blanks.
+	prefix []byte
 
 	// indent is the indentation of the opening line.
 	indent int
@@ -592,7 +592,7 @@ func (b *bodyLines) findClosingRun(start int, length int) int {
 		lineStart := start
 		start = lineEnd(b.source, lineStart)
 
-		line, ok := withoutContainerPrefix(b.source[lineStart:start], b.prefix)
+		line, ok := withoutContainerPrefix(untabbed(b.source[lineStart:start]), b.prefix)
 		if !ok {
 			return -1
 		}
@@ -601,8 +601,8 @@ func (b *bodyLines) findClosingRun(start int, length int) int {
 			continue
 		}
 
-		w, pos := util.IndentWidth(line, b.column)
-		if w += b.padding; w < b.indent {
+		w, pos := util.IndentWidth(line, 0)
+		if w < b.indent {
 			return -1
 		}
 
@@ -683,6 +683,31 @@ func (b *bodyLines) findClosingRun(start int, length int) int {
 	}
 
 	return -1
+}
+
+// untabbed returns line with each tab among its quote markers and indentation
+// as the blanks it spans, tab stops being four columns apart as goldmark has
+// them, so that there a byte is a column.
+func untabbed(line []byte) []byte {
+	lead := 0
+	for lead < len(line) && (line[lead] == ' ' || line[lead] == '\t' || line[lead] == '>') {
+		lead++
+	}
+
+	if bytes.IndexByte(line[:lead], '\t') < 0 {
+		return line
+	}
+
+	spaced := make([]byte, 0, len(line)+3*lead)
+	for _, c := range line[:lead] {
+		if c == '\t' {
+			spaced = append(spaced, "    "[:4-len(spaced)%4]...)
+		} else {
+			spaced = append(spaced, c)
+		}
+	}
+
+	return append(spaced, line[lead:]...)
 }
 
 // listItemContent returns how many columns into line the content of the list

@@ -397,6 +397,33 @@ func TestAdmonitionBodyIsIndentedOrClosed(t *testing.T) {
 			},
 		},
 		{
+			// A line's column is read off its own tabs: the run is level with
+			// the opening line whatever blanks either is written with.
+			name:   "in a blockquote behind a tab, closed by a run behind spaces",
+			source: ">\t!!! note\n>\tbody\n>   !!!\n\nafter\n",
+			want:   []string{"Blockquote", "  !note", "    Paragraph:body", "Paragraph:after"},
+		},
+		{
+			name:   "in a list item behind a tab, closed by a run behind spaces",
+			source: "-\t!!! note\n\tbody\n    !!!\n\nafter\n",
+			want:   []string{"List", "  ListItem", "    !note", "      Paragraph:body", "Paragraph:after"},
+		},
+		{
+			name:   "in a list item behind spaces, closed by a run behind a tab",
+			source: "-   !!! tip\n\n    body\n\t!!!\n\nafter\n",
+			want:   []string{"List", "  ListItem", "    !tip", "      Paragraph:body", "Paragraph:after"},
+		},
+		{
+			name:   "in a list item, the body behind a tab, closed by a run behind spaces",
+			source: "-   !!! tip\n\n\tbody\n    !!!!\n\nafter\n",
+			want:   []string{"List", "  ListItem", "    !tip", "      Paragraph:body", "Paragraph:after"},
+		},
+		{
+			name:   "in an ordered list item behind a tab, closed by a run behind spaces",
+			source: "1.\t!!! note\n\tbody\n    !!!\nafter\n",
+			want:   []string{"List", "  ListItem", "    !note", "      Paragraph:body", "Paragraph:after"},
+		},
+		{
 			name:   "closed by a run after a quote marker without its blank",
 			source: "> !!! note \"T\"\n> a\n>!!!\n> c\n",
 			want:   []string{"Blockquote", "  !note", "    Paragraph:a", "  Paragraph:c"},

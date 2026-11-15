@@ -58,6 +58,28 @@ type Admonition struct {
 	// Title is the rest of the opening line before any attributes, quotes
 	// included.
 	Title []byte
+
+	// lookAhead is what was read ahead about the closing run, for the tests
+	// that hold it to the parse.
+	lookAhead lookAhead
+}
+
+// lookAhead is what the parser read ahead about one admonition's closing run,
+// and what came of it.
+type lookAhead struct {
+	// asked is whether the body started level with the opening line, so that
+	// a closing run was looked for.
+	asked bool
+
+	// indent is the indentation of the opening line.
+	indent int
+
+	// runEnd is where the run that was found ends, and -1 when none was.
+	runEnd int
+
+	// closedAt is where the run that closed the admonition ends, and 0 for
+	// one that no run closed.
+	closedAt int
 }
 
 // Dump implements ast.Node.
@@ -307,6 +329,8 @@ func (b *admonitionParser) Continue(node ast.Node, reader text.Reader, pc parser
 	// then left to a block of its body would run to the end of the document.
 	closing, newline := hasAdmonitionClosingRun(line, w, pos, state)
 	if closing && (first || state.indented() || segment.Stop == state.runEnd) {
+		state.node.lookAhead.closedAt = segment.Stop
+
 		// Len counts the padding already, which Advance steps over first.
 		reader.Advance(segment.Len() - newline)
 
@@ -317,7 +341,10 @@ func (b *admonitionParser) Continue(node ast.Node, reader text.Reader, pc parser
 	// ahead the admonition ends here, at its opening line, and this line is
 	// read after it.
 	if first && w == state.indent {
-		if state.runEnd = closingRunAhead(reader, pc, state.indent, state.length); state.runEnd < 0 {
+		state.runEnd = closingRunAhead(reader, pc, state.indent, state.length)
+		state.node.lookAhead = lookAhead{asked: true, indent: state.indent, runEnd: state.runEnd}
+
+		if state.runEnd < 0 {
 			return parser.Close
 		}
 	}
@@ -433,6 +460,11 @@ type closingRuns struct {
 	// blocks is a context with no block open, to ask goldmark's parsers what
 	// a line starts.
 	blocks parser.Context
+
+	// visits counts the lines read ahead, and depth how many admonitions
+	// deep the reading went, deepest holding the most: what the tests bound
+	// the work by.
+	visits, depth, deepest int
 }
 
 // closingRunsKey holds the *closingRuns of the document being parsed.
@@ -552,8 +584,12 @@ func (b *bodyLines) closingRun(start int, length int) int {
 		return end
 	}
 
+	b.runs.depth++
+	b.runs.deepest = max(b.runs.deepest, b.runs.depth)
+
 	end := b.findClosingRun(start, length)
 	b.runs.ends[start] = end
+	b.runs.depth--
 
 	return end
 }
@@ -601,6 +637,7 @@ func (b *bodyLines) findClosingRun(start int, length int) int {
 	for start < len(b.source) && start <= b.runs.last {
 		lineStart := start
 		start = lineEnd(b.source, lineStart)
+		b.runs.visits++
 
 		line, ok := withoutContainerPrefix(untabbed(b.source[lineStart:start]), b.prefix)
 		if !ok {

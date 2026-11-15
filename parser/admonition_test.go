@@ -3,7 +3,6 @@ package parser_test
 import (
 	"strings"
 	"testing"
-	"time"
 
 	cparser "github.com/kovetskiy/mark/v17/parser"
 	"github.com/stretchr/testify/assert"
@@ -545,14 +544,14 @@ func TestAdmonitionsWithoutABodyAreNotNested(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			source := strings.Repeat("!!! note \"T\"\n\ntext\n\n", count) + tail
 
-			start := time.Now()
 			blocks := outline(t, source)
 
 			assert.Equal(t, []string{"!note", "Paragraph:text", "!note", "Paragraph:text"}, blocks[:4])
 			assert.Equal(t, "!note", blocks[2*count-2])
 
-			// Read once for each, a page this long takes minutes.
-			assert.Less(t, time.Since(start), 20*time.Second)
+			// Read to the last run once for each, a page this long takes
+			// minutes; read once, each line is read ahead at most twice.
+			assert.LessOrEqual(t, readAdmonitions(source).work.Visits, 2*strings.Count(source, "\n"))
 		})
 	}
 }

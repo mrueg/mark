@@ -51,6 +51,7 @@ tests, which take minutes. There is currently no `-short` skip.
 | `report/` | what a run did, for `--output-format` and the run's summary, and the `--on-orphan` actions |
 | `stdlib/` | the `text/template` set that emits all `<ac:*>` markup |
 | `docs/` | the user reference, one page per topic; `README.md` keeps the overview, installation and command-line usage |
+| `internal/admonitiongen` | generated documents around MkDocs admonitions, for the tests that hold the admonition parser's look-ahead to goldmark's parse |
 | `internal/fspath` | `ResolveDeepest`, a path with symlinks resolved as deep as it exists; `Within`, a path relative to a root it is under; and `Under`, `Within` tried again on resolved paths: so attachment and staged-root containment compare paths the way the files they name compare |
 | `internal/globpattern` | the glob syntax test and escaping shared by `Run`'s checks, the orphan handling and the page manifest's patterns |
 | `internal/goldmarktest` | a goldmark parser and renderer built together, for tests |
@@ -250,6 +251,15 @@ compared against `testdata/<name>.html`; variant suffixes cover flag combination
 
 Adding a `.md` fixture without its matching `.html` panics the test — the loader reads
 both unconditionally. There is no `-update` flag; golden files are written by hand.
+
+The admonition parser reads ahead for a closing run with an account of its own of
+where code and HTML blocks, list items and blockquotes start and end, and each place it
+disagreed with goldmark was a bug. `parser/admonition_differential_test.go` holds the two
+together on documents `internal/admonitiongen` writes from a fixed seed, and on
+`parser/testdata/admonition-master.json`, the trees the parser gave such documents before
+a body level with its opening line had to end at a closing run; `FuzzAdmonitionDocuments`
+is the same for as long as it is left running. A change to the look-ahead that the
+generator cannot write a document for wants the generator extended first.
 
 Coverage is uneven, and where it is thin matters more than the number. Measured with
 `go test -cover ./...`: `markdown/` 84%, `renderer/` 69%, `confluence/` 84%, `stdlib/` 68%,

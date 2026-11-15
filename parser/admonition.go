@@ -570,7 +570,10 @@ func (b *bodyLines) closingRun(start int, length int) int {
 // opened by length '!'. A line inside a fenced code block or an HTML block
 // that runs on over blank lines is not one, and a run closes the nearest
 // admonition above it that is still open: one opened in this body takes the
-// run after its own unindented body, or straight after its indented one.
+// run after its own unindented body, or straight after its indented one. A
+// run straight after an indented one that was opened by a shorter run than
+// this admonition closes this one instead when no later run does: it is
+// longer than that one asks for.
 func (b *bodyLines) findClosingRun(start int, length int) int {
 	var (
 		// opened is the opening run of an admonition whose body has not
@@ -586,6 +589,11 @@ func (b *bodyLines) findClosingRun(start int, length int) int {
 		fence       byte
 		fenceLength int
 		html        ast.HTMLBlockKind
+
+		// spare is where the last run ends that closed an admonition opened
+		// by a shorter run than this one and is long enough for this one, or
+		// -1.
+		spare = -1
 	)
 
 	for start < len(b.source) && start <= b.runs.last {
@@ -594,7 +602,7 @@ func (b *bodyLines) findClosingRun(start int, length int) int {
 
 		line, ok := withoutContainerPrefix(untabbed(b.source[lineStart:start]), b.prefix)
 		if !ok {
-			return -1
+			return spare
 		}
 
 		if util.IsBlank(line) {
@@ -603,7 +611,7 @@ func (b *bodyLines) findClosingRun(start int, length int) int {
 
 		w, pos := util.IndentWidth(line, 0)
 		if w < b.indent {
-			return -1
+			return spare
 		}
 
 		line = line[pos:]
@@ -659,7 +667,7 @@ func (b *bodyLines) findClosingRun(start int, length int) int {
 
 				continue
 			} else if length >= nested {
-				return -1
+				return spare
 			}
 		}
 
@@ -676,13 +684,17 @@ func (b *bodyLines) findClosingRun(start int, length int) int {
 		case !bare:
 			opened = run
 		case above > 0 && run >= above:
-			// It closes the admonition with the indented body above it.
+			// It closes the admonition with the indented body above it,
+			// unless it turns out to be the last run this one could have.
+			if length > above && run >= length {
+				spare = start
+			}
 		case run >= length:
 			return start
 		}
 	}
 
-	return -1
+	return spare
 }
 
 // untabbed returns line with each tab among its quote markers and indentation

@@ -358,6 +358,33 @@ func TestAdmonitionBodyIsIndentedOrClosed(t *testing.T) {
 			want:   []string{"!note", "Paragraph:text", "!tip", "  Paragraph:body", "Paragraph:after"},
 		},
 		{
+			// The run is longer than the inner one asks for and nothing after
+			// it closes the outer one.
+			name:   "a longer run straight after a nested indented body closes the outer one",
+			source: "!!!! quote \"T\"\nw2\n\n!!! note \"N\"\n    w5\n\n!!!!\nafter\n",
+			want:   []string{"!quote", "  Paragraph:w2", "  !note", "    Paragraph:w5", "Paragraph:after"},
+		},
+		{
+			name:   "a longer run straight after a nested indented body, at the end of the document",
+			source: "!!!! quote \"T\"\nw2\n\n!!! note \"N\"\n    w5\n\n!!!!\n",
+			want:   []string{"!quote", "  Paragraph:w2", "  !note", "    Paragraph:w5"},
+		},
+		{
+			name:   "a longer run straight after a nested indented body, and one after it",
+			source: "!!!! quote \"T\"\nw2\n!!! note \"N\"\n    w5\n!!!!\nw7\n!!!!\nafter\n",
+			want:   []string{"!quote", "  Paragraph:w2", "  !note", "    Paragraph:w5", "  Paragraph:w7", "Paragraph:after"},
+		},
+		{
+			name:   "each closed by its own run, the outer one opened by a longer run",
+			source: "!!!! quote \"T\"\nw2\n!!! note \"N\"\n    w5\n!!!\n!!!!\nafter\n",
+			want:   []string{"!quote", "  Paragraph:w2", "  !note", "    Paragraph:w5", "Paragraph:after"},
+		},
+		{
+			name:   "a longer run, title only, then one with an indented body and a run of its own",
+			source: "!!!! quote \"T\"\n\ntext\n\n!!! note \"N\"\n    w5\n!!!\n\nafter\n",
+			want:   []string{"!quote", "Paragraph:text", "!note", "  Paragraph:w5", "Paragraph:after"},
+		},
+		{
 			// The paragraph of the inner body runs on over the line that
 			// ended that body, and the run after it is the outer one's.
 			name:   "a run after a nested indented body and a line level with it",

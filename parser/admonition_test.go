@@ -620,6 +620,48 @@ func TestAdmonitionBodyIsIndentedOrClosed(t *testing.T) {
 			source: "> !!! note \"T\"\n>\n> quoted\n\nafter\n",
 			want:   []string{"Blockquote", "  !note", "  Paragraph:quoted", "Paragraph:after"},
 		},
+		{
+			// The "{" that is no attribute block starts a paragraph on the
+			// opening line, which the next line goes on lazily; the
+			// admonition ends with that paragraph.
+			name:   "a paragraph on the opening line, then no run",
+			source: "!!! note \"Use {name}\"\nnext\n\nafter\n\n## Heading\n",
+			want:   []string{"!note", "  Paragraph:{name}\"\nnext", "Paragraph:after", "Heading:Heading"},
+		},
+		{
+			// After the fence the look-ahead does not take w4 to go on the
+			// paragraph of the inner indented body, and finds the outer run
+			// one line early; the parse does, and the run there is the
+			// middle one's.
+			name: "a run of the middle one, found for the outer one",
+			source: "!!! note \"a\"\nw1\n~~~\nw2\n~~~\n!!! tip \"b\"\n!!! warning \"c\"\n    w3\nw4\n    w5\n" +
+				"!!!\n!!!\n!!!\nafter\n",
+			want: []string{
+				"!note", "  Paragraph:w1", "  CodeBlock", "  !tip", "    !warning", "      Paragraph:w3\nw4\nw5",
+				"Paragraph:after",
+			},
+		},
+		{
+			// An ordered item numbered other than 1 does not interrupt a
+			// paragraph: the fence after it is no item's, and holds the run.
+			name:   "a fence after a line that cannot start a list item",
+			source: "!!! note \"T\"\nw1\n2. w2\n   ```\n!!!\n   ```\n!!!\nafter\n",
+			want:   []string{"!note", "  Paragraph:w1\n2. w2", "  CodeBlock", "Paragraph:after"},
+		},
+		{
+			name:   "a fence after a setext underline",
+			source: "!!! note \"T\"\nw1\n-\n  ```\n!!!\n  ```\n!!!\nafter\n",
+			want:   []string{"!note", "  Heading:w1", "  CodeBlock", "Paragraph:after"},
+		},
+		{
+			name: "a run found for the outer one, inside the body of a longer one",
+			source: "> !!!! tip\n> <![CDATA[\n> ]]>\n>\n> !!!!! warning\n> !!! a\n> \tw1\n>\n> !!!\n>\n>!!!!\n>\n" +
+				"> !!! tip\n> w2\nw3\n>\n> !!!\n> !!!!!\n> !!!!\n\nafter\n",
+			want: []string{
+				"Blockquote", "  !tip", "    HTMLBlock", "    !warning", "      !a", "        Paragraph:w1",
+				"      Paragraph:!!!!", "      !tip", "        Paragraph:w2\nw3", "Paragraph:after",
+			},
+		},
 	}
 
 	for _, tt := range tests {

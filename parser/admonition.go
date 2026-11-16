@@ -138,6 +138,16 @@ type admonitionState struct {
 	// ends, as the look-ahead found it at the first body line, and -1 for
 	// any other body.
 	runEnd int
+
+	// ended is whether the admonition ended at its opening line. goldmark
+	// keeps it open while a paragraph the opening line began goes on lazily,
+	// and it ends with that paragraph.
+	ended bool
+
+	// deferred is whether the run found for the body turned out to belong to
+	// an admonition opened in it, and the body waits for that one to end
+	// before reading ahead again.
+	deferred bool
 }
 
 // indented reports whether the body is indented under the opening line, and
@@ -318,6 +328,9 @@ func (b *admonitionParser) Continue(node ast.Node, reader text.Reader, pc parser
 		return parser.Close
 	}
 	state := stack[level]
+	if state.ended {
+		return parser.Close
+	}
 
 	line, segment := reader.PeekLine()
 	w, pos := util.IndentWidth(line, reader.LineOffset())
@@ -330,11 +343,38 @@ func (b *admonitionParser) Continue(node ast.Node, reader text.Reader, pc parser
 		state.gap = true
 	}
 
+	closing, newline := hasAdmonitionClosingRun(line, w, pos, state)
+
+	// The look-ahead may read an admonition opened in this body differently
+	// from the parse, and find this one's run where that one is still open:
+	// the run is that one's, or text of its body. This one then goes on past
+	// it, and reads ahead again once that one has ended.
+	if !first && state.runEnd >= 0 {
+		switch {
+		case segment.Stop == state.runEnd && waitingInside(stack[level+1:], segment.Stop):
+			state.deferred, closing = true, false
+		case state.deferred && !waitingInside(stack[level+1:], segment.Stop) && !util.IsBlank(line[pos:]):
+			state.deferred = false
+
+			// With no run ahead, the body held nothing after the run it
+			// waited at, and ends here.
+			next := closingRunAhead(reader, pc, state.indent, state.length, lineStart(reader.Source(), segment.Start))
+			if next < 0 {
+				state.ended, state.node.lookAhead.closedAt = true, state.runEnd
+
+				return parser.Close
+			}
+
+			state.runEnd, state.node.lookAhead.runEnd = next, next
+
+			closing, newline = hasAdmonitionClosingRun(line, w, pos, state)
+		}
+	}
+
 	// An indented body ends at any closing run. One level with the opening
 	// line ends at the run the look-ahead found and at no other: the two read
 	// the body by different means, and an admonition kept open for a run it
 	// then left to a block of its body would run to the end of the document.
-	closing, newline := hasAdmonitionClosingRun(line, w, pos, state)
 	if closing && (first || state.indented() || segment.Stop == state.runEnd) {
 		state.node.lookAhead.closedAt = segment.Stop
 
@@ -348,10 +388,12 @@ func (b *admonitionParser) Continue(node ast.Node, reader text.Reader, pc parser
 	// ahead the admonition ends here, at its opening line, and this line is
 	// read after it.
 	if first && w == state.indent {
-		state.runEnd = closingRunAhead(reader, pc, state.indent, state.length)
+		state.runEnd = closingRunAhead(reader, pc, state.indent, state.length, lineStart(reader.Source(), segment.Start))
 		state.node.lookAhead = lookAhead{asked: true, indent: state.indent, runEnd: state.runEnd}
 
 		if state.runEnd < 0 {
+			state.ended = true
+
 			// Straight after the opening line, the line was written as the
 			// admonition's body, and its author is told that it is not. After
 			// a blank line it is what follows an admonition with no body, the
@@ -396,6 +438,11 @@ func (b *admonitionParser) Close(node ast.Node, reader text.Reader, pc parser.Co
 	stack := admonitionStack(pc)
 	for i, state := range stack {
 		if state.node == node {
+			// Nothing came after the run it waited at but what ended it.
+			if state.deferred {
+				state.node.lookAhead.closedAt = state.runEnd
+			}
+
 			pc.Set(admonitionStackKey, slices.Delete(slices.Clone(stack), i, i+1))
 
 			return
@@ -586,11 +633,12 @@ func withoutContainerPrefix(line []byte, prefix []byte) (rest []byte, ok bool) {
 
 // closingRunAhead returns where the closing run of an admonition ends, or -1
 // when it has none: one opened by a run of length '!' at indent, whose body
-// starts level with its opening line on the line the reader is at.
-func closingRunAhead(reader text.Reader, pc parser.Context, indent int, length int) int {
+// is level with its opening line and read from the line that starts at from,
+// in the list items and blockquotes of the line the reader is at.
+func closingRunAhead(reader text.Reader, pc parser.Context, indent int, length int, from int) int {
 	source := reader.Source()
 	_, segment := reader.PeekLine()
-	start := bytes.LastIndexByte(source[:segment.Start], '\n') + 1
+	start := lineStart(source, segment.Start)
 
 	// The columns of a tab the containers took only part of are indentation.
 	prefix := untabbed(source[start:segment.Start])
@@ -604,7 +652,20 @@ func closingRunAhead(reader text.Reader, pc parser.Context, indent int, length i
 		runs:   documentClosingRuns(pc, source),
 	}
 
-	return body.closingRun(start, length, true)
+	return body.closingRun(from, length, true)
+}
+
+// lineStart returns where the line that holds byte at starts.
+func lineStart(source []byte, at int) int {
+	return bytes.LastIndexByte(source[:at], '\n') + 1
+}
+
+// waitingInside reports whether one of the admonitions open in a body is
+// kept open for a closing run that ends at end or later.
+func waitingInside(inner []*admonitionState, end int) bool {
+	return slices.ContainsFunc(inner, func(state *admonitionState) bool {
+		return state.runEnd >= end
+	})
 }
 
 // bodyLines reads the lines of a body that is level with its opening line,
@@ -649,7 +710,9 @@ const (
 // indentation where p was known before it, and whether the line is plain
 // text: one that goes on an open paragraph, and opens one otherwise. Where it
 // cannot tell it says unknown, which keeps the admonition from running on.
-func (b *bodyLines) after(line []byte, p paragraph) (after paragraph, plain bool) {
+// own is whether an open paragraph is the body's own, which not every list
+// item interrupts.
+func (b *bodyLines) after(line []byte, p paragraph, own bool) (after paragraph, plain bool) {
 	// What a list item starts with is read for what is open after it, and is
 	// no line of text itself.
 	for item := false; ; item = true {
@@ -687,7 +750,7 @@ func (b *bodyLines) after(line []byte, p paragraph) (after paragraph, plain bool
 				return paragraphUnknown, false
 			}
 		default:
-			if _, text, ok := listItem(line); ok && text != nil {
+			if _, text, ok := listItemAfter(line, own && p == paragraphOpen); ok && text != nil {
 				line, p = text, paragraphClosed
 
 				continue
@@ -752,7 +815,7 @@ func (b *bodyLines) lazy(line []byte, p paragraph) bool {
 		return true
 	}
 
-	_, plain := b.after(line, p)
+	_, plain := b.after(line, p, false)
 
 	return plain
 }
@@ -1105,7 +1168,10 @@ func (b *bodyLines) read(s *scan) (end int, nested int) {
 			continue
 		}
 
-		after, isText := b.after(line, s.text)
+		// A paragraph open in a list item or a body this one holds is not
+		// this body's own, and a list starts after it as after none.
+		own := s.text == paragraphOpen && s.item == 0 && s.indented == 0 && s.resume == 0
+		after, isText := b.after(line, s.text, own)
 
 		// A line of text no deeper than the opening line of an indented body
 		// goes on the paragraph that body ended in, and the body is still
@@ -1133,7 +1199,7 @@ func (b *bodyLines) read(s *scan) (end int, nested int) {
 		s.text = after
 
 		if !lazy {
-			if s.item, _, _ = listItem(line); s.item > 0 {
+			if s.item, _, _ = listItemAfter(line, own); s.item > 0 {
 				s.item += w - b.indent
 			}
 		}
@@ -1216,7 +1282,7 @@ func (b *bodyLines) passed(line []byte, run int, beyond int, p paragraph) paragr
 		return paragraphHidden
 	}
 
-	after, isText := b.after(line, p)
+	after, isText := b.after(line, p, false)
 
 	switch {
 	case isText && beyond > 3 && p != paragraphOpen:
@@ -1298,6 +1364,24 @@ func listItem(line []byte) (content int, text []byte, ok bool) {
 	}
 
 	return marker + blanks, rest[pos:], true
+}
+
+// listItemAfter is listItem for a line that may follow a paragraph of the
+// body's own, which paragraph says: an item interrupts one only when it
+// starts with text and, in an ordered list, is numbered 1. Otherwise the line
+// goes on the paragraph, or underlines it.
+func listItemAfter(line []byte, paragraph bool) (content int, text []byte, ok bool) {
+	content, text, ok = listItem(line)
+	if !ok || !paragraph {
+		return content, text, ok
+	}
+
+	marker := bytes.IndexAny(line, "-+*.)")
+	if number := line[:marker]; util.IsBlank(line[marker+1:]) || (len(number) > 0 && strings.TrimLeft(string(number), "0") != "1") {
+		return 0, nil, false
+	}
+
+	return content, text, ok
 }
 
 // attributesEndLine reports whether an attribute block in goldmark v1's

@@ -57,8 +57,8 @@ tests, which take minutes. There is currently no `-short` skip.
 | `internal/goldmarktest` | a goldmark parser and renderer built together, for tests |
 | `internal/htmlblock` | an HTML block's lines without its closing line, as goldmark v1 gave them, and the marker that closes a block of each kind |
 | `internal/lazy` | the start-on-first-use, discard and close of a run's browser and mermaid engine; Close cancels a start in flight |
-| `internal/mdsource` | the raw Markdown before goldmark: where the code is, `<!-- ac:ignore -->` regions, CRLF and BOM normalisation, the line of a text a line of what was made from it came from |
 | `internal/parsenote` | what a block parser found for the document's author, carried in the parse's context to `CompileMarkdown`, which reports it: an admonition published without its body |
+| `internal/mdsource` | the raw Markdown before goldmark: where the code is, `<!-- ac:ignore -->` regions, CRLF and BOM normalisation |
 | `internal/rendercheck` | the rendering settings' rules (scales, image alignment) that `mark.Config` validation and the publish flag checks share |
 | `internal/syntax` | what publishing and export must read alike: heading ids and attribute blocks, anchor keys, the `page#anchor` split, code block info strings and language aliases, admonition markers |
 
@@ -169,7 +169,8 @@ error return, so `transformer.PipelineTransformer` accumulates errors internally
 that fails silently without recording into the pipeline will produce a wrong page and a
 zero exit code. A block parser returns nothing but a node either: what it finds for the
 author goes into the parse's context through `internal/parsenote`, and `CompileMarkdown`
-turns it into a warning once the document is rendered.
+turns it into a warning once the document is rendered, with the line `mdsource.LineOf`
+finds for it in the text that was written.
 
 **6. Attachment checksums are content-addressed, but rendered ones are source-addressed.**
 Checksums live in the remote attachment's comment behind `attachment.AttachmentChecksumPrefix`

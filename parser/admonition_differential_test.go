@@ -118,10 +118,14 @@ func (r reading) words() []string {
 }
 
 // lookAheadAgrees holds what was read ahead to what was parsed: an admonition
-// with no closing run ahead has no body, and one kept open for a closing run
-// ends at that run. The run closes it, or closes an admonition around it and
-// it with that one: a line indented less than the body it is in reads level
-// with two admonitions at once, and then both are kept open for one run.
+// with no closing run ahead has no body but what its opening line started,
+// and one kept open for a closing run is not open past it. The run closes it, or a run no later closes an
+// admonition around it and it with that one. A line indented less than the
+// body it is in reads level with two admonitions at once, which are then both
+// kept open for one run; and one admonition's run is sometimes read ahead
+// twice, the first time from an opening line that may be text of a code or
+// HTML block, when no line is taken to go on a paragraph lazily and the run
+// found for the admonition around it may come sooner.
 func (r reading) lookAheadAgrees() error {
 	return ast.Walk(r.doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
 		admonition, ok := node.(*cparser.Admonition)
@@ -134,9 +138,9 @@ func (r reading) lookAheadAgrees() error {
 
 		switch {
 		case !ahead.Asked:
-		case ahead.RunEnd < 0 && (admonition.HasChildren() || ahead.ClosedAt != 0):
+		case ahead.RunEnd < 0 && (ahead.ClosedAt != 0 || r.holdsLaterLines(admonition)):
 			return ast.WalkStop, fmt.Errorf("line %d: no closing run was found ahead, and the admonition has a body", line)
-		case ahead.RunEnd >= 0 && !closedAt(admonition, ahead.RunEnd):
+		case ahead.RunEnd >= 0 && !closedBy(admonition, ahead.RunEnd):
 			return ast.WalkStop, fmt.Errorf(
 				"line %d: kept open for the closing run that ends at byte %d, and closed at byte %d (0: by no run)",
 				line, ahead.RunEnd, ahead.ClosedAt)
@@ -146,12 +150,32 @@ func (r reading) lookAheadAgrees() error {
 	})
 }
 
-// closedAt reports whether the run that ends at end closed node or an
-// admonition around it.
-func closedAt(node ast.Node, end int) bool {
-	for ; node != nil; node = node.Parent() {
-		if admonition, ok := node.(*cparser.Admonition); ok && cparser.LookAheadOf(admonition).ClosedAt == end {
+// holdsLaterLines reports whether a block of the admonition's starts after
+// its opening line. A paragraph that starts on that line, with what is left
+// of it when a "{" there is no attribute block, goes on in the lines after it
+// as any paragraph does.
+func (r reading) holdsLaterLines(admonition *cparser.Admonition) bool {
+	for child := admonition.FirstChild(); child != nil; child = child.NextSibling() {
+		if r.lineOf(child.Pos()) != r.lineOf(admonition.Pos()) {
 			return true
+		}
+	}
+
+	return false
+}
+
+// closedBy reports whether the run that ends at end closed node, or a run
+// that ends no later closed an admonition around it.
+func closedBy(node ast.Node, end int) bool {
+	if cparser.LookAheadOf(node.(*cparser.Admonition)).ClosedAt == end {
+		return true
+	}
+
+	for node = node.Parent(); node != nil; node = node.Parent() {
+		if admonition, ok := node.(*cparser.Admonition); ok {
+			if at := cparser.LookAheadOf(admonition).ClosedAt; at > 0 && at <= end {
+				return true
+			}
 		}
 	}
 
@@ -285,7 +309,7 @@ func (r reading) runLeftAsText(marker byte) error {
 // left unclosed, which ends with the admonition it is in and not otherwise.
 func regular() admonitiongen.Options {
 	o := admonitiongen.All()
-	o.Indents, o.Ragged, o.Unclosed, o.Lazy = false, false, false, false
+	o.Indents, o.Ragged, o.Unclosed, o.LazyDeep = false, false, false, false
 
 	return o
 }
@@ -407,16 +431,20 @@ func FuzzAdmonitionDocuments(f *testing.F) {
 // TestAdmonitionsReadAsBefore holds the forms this parser has not changed
 // the reading of to the reading they had: testdata/admonition-master.json
 // holds generated documents with the tree the parser gave them before a body
-// level with its opening line had to end at a closing run. They are of two
+// level with its opening line had to end at a closing run. They are of three
 // classes. In "indented" every admonition has an indented body and no line
 // of a closing run is written; in "closed" a body may be level with its
-// opening line, and then ends at a closing run of its own. Some of each are
-// written with tabs.
+// opening line, and then ends at a closing run of its own; "lazy" is "closed"
+// with paragraphs that go on in lines lacking the indentation or the markers
+// of what they are in. Some of each are written with tabs.
 //
 // The trees are recorded rather than derived, because the reading they hold
 // is what documents were written against. The file is made once: the
 // documents by admonitiongen, each tree by parsing its document with the
-// parser of the commit the change was made on.
+// parser of the commit the change was made on. Of the lazy ones, those are
+// left out where a closing run follows lines level with an indented body
+// inside the admonition: that run now closes the admonition, and used to
+// close the body inside it and leave the admonition open to the end.
 func TestAdmonitionsReadAsBefore(t *testing.T) {
 	data, err := os.ReadFile("testdata/admonition-master.json")
 	require.NoError(t, err)

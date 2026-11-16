@@ -96,6 +96,11 @@ func TestAdmonitionBodyWarningIsForTheRightAdmonitions(t *testing.T) {
 		{name: "closed by a run straight after", source: "!!! note \"T\"\n!!!\nafter\n"},
 		{name: "nested, each closed by its run", source: "!!! note\na\n!!! tip\nb\n!!!\nc\n!!!\n"},
 		{name: "ended by a line indented less than it", source: "  !!! note\nbody\n"},
+		{name: "closed by a run after a line that lacks the list item's indentation", source: "- !!! note\n  text\nlazy\n  !!!\n"},
+		{
+			name:   "nested, the inner body going on after a line level with it, each closed by its run",
+			source: "!!! note\nintro\n!!! tip\n    b\nlazy\n\n    c\n!!!\nstill outer\n!!!\nafter\n",
+		},
 	}
 
 	for _, tt := range tests {

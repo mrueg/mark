@@ -425,6 +425,95 @@ func TestAdmonitionBodyIsIndentedOrClosed(t *testing.T) {
 			want:   []string{"!note", "  !tip", "    Paragraph:b\nlazy", "Paragraph:after"},
 		},
 		{
+			name:   "a run after a line of the body's paragraph that lacks the list item's indentation",
+			source: "- !!! note\n  text\nlazy\n  !!!\n  after\n",
+			want:   []string{"List", "  ListItem", "    !note", "      Paragraph:text\nlazy", "    Paragraph:after"},
+		},
+		{
+			name:   "a run after two such lines, in an ordered list item",
+			source: "1. !!! note\n   text\nlazy one\nlazy two\n   !!!\n\nafter\n",
+			want:   []string{"List", "  ListItem", "    !note", "      Paragraph:text\nlazy one\nlazy two", "Paragraph:after"},
+		},
+		{
+			name:   "a run after a line of the body's paragraph that lacks the quote marker",
+			source: "> !!! note\n> text\nlazy\n> !!!\n",
+			want:   []string{"Blockquote", "  !note", "    Paragraph:text\nlazy"},
+		},
+		{
+			name:   "a run after a line that lacks the indentation of a list item in a blockquote",
+			source: "> - !!! note\n>   text\n> lazy\n>   !!!\n",
+			want:   []string{"Blockquote", "  List", "    ListItem", "      !note", "        Paragraph:text\nlazy"},
+		},
+		{
+			name:   "a run after a line that lacks both the quote marker and the list item's indentation",
+			source: "> - !!! note\n>   text\nlazy\n>   !!!\n",
+			want:   []string{"Blockquote", "  List", "    ListItem", "      !note", "        Paragraph:text\nlazy"},
+		},
+		{
+			name:   "a run after a line of the body's paragraph indented less than the opening line",
+			source: "  !!! note\n  text\nlazy\n  !!!\nafter\n",
+			want:   []string{"!note", "  Paragraph:text\nlazy", "Paragraph:after"},
+		},
+		{
+			name:   "a run after a line that goes on the paragraph of a list item in the body",
+			source: "- !!! note\n  - item\nlazy\n  !!!\n",
+			want: []string{
+				"List", "  ListItem", "    !note", "      List", "        ListItem", "          Paragraph:item\nlazy",
+			},
+		},
+		{
+			// A run with nothing after it opens nothing, so where it cannot
+			// close anything it is text of the paragraph.
+			name:   "a run after a run that lacks the list item's indentation",
+			source: "- !!! note\n  text\n!!!\n  !!!\nafter\n",
+			want:   []string{"List", "  ListItem", "    !note", "      Paragraph:text\n!!!", "Paragraph:after"},
+		},
+		{
+			name:   "a heading without the list item's indentation ends the item, and the admonition with no run",
+			source: "- !!! note\n  text\n# heading\n  !!!\n",
+			want:   []string{"List", "  ListItem", "    !note", "    Paragraph:text", "Heading:heading", "Paragraph:!!!"},
+		},
+		{
+			name:   "a line without the quote marker after a code block ends the quotation",
+			source: "> !!! note\n> ```\n> code\n> ```\ntext\n> !!!\n",
+			want:   []string{"Blockquote", "  !note", "  CodeBlock", "Paragraph:text", "Blockquote", "  Paragraph:!!!"},
+		},
+		{
+			// After a code block the look-ahead does not vouch for a
+			// paragraph being open, and takes no line to go on one.
+			name:   "a run after a code block and a line that lacks the list item's indentation is not looked for",
+			source: "- !!! note\n  ```\n  code\n  ```\n  text\nlazy\n  !!!\n",
+			want:   []string{"List", "  ListItem", "    !note", "    CodeBlock", "    Paragraph:text\nlazy\n!!!"},
+		},
+		{
+			// The line level with the inner opening line goes on the inner
+			// body's paragraph, and the indented line after it on that body.
+			name:   "a nested indented body that goes on after a line level with it, each closed by its run",
+			source: "!!! note \"outer\"\nintro\n!!! tip \"inner\"\n    b\nlazy\n\n    c\n!!!\nstill outer\n!!!\nafter\n",
+			want: []string{
+				"!note", "  Paragraph:intro", "  !tip", "    Paragraph:b\nlazy", "    Paragraph:c", "  Paragraph:still outer",
+				"Paragraph:after",
+			},
+		},
+		{
+			name:   "a nested indented body that goes on in the same paragraph after a line level with it",
+			source: "!!! note \"outer\"\nintro\n!!! tip \"inner\"\n    b\nlazy\n    c\n!!!\nstill outer\n!!!\nafter\n",
+			want: []string{
+				"!note", "  Paragraph:intro", "  !tip", "    Paragraph:b\nlazy\nc", "  Paragraph:still outer", "Paragraph:after",
+			},
+		},
+		{
+			name:   "an indented body of one opened two columns in, which goes on after a line level with it",
+			source: "!!! note \"outer\"\ntext\n  !!! tip \"inner\"\n    b\n  lazy\n\n    c\n!!!\nafter\n",
+			want:   []string{"!note", "  Paragraph:text", "  !tip", "    Paragraph:b\nlazy", "    Paragraph:c", "Paragraph:after"},
+		},
+		{
+			// The code block ends with the body it is in, at that body's run.
+			name:   "a code block left open in an indented body opened one column in",
+			source: "!!! note \"outer\"\ntext\n !!! tip \"inner\"\n   ```\n   code\n !!!\nmore\n!!!\nafter\n",
+			want:   []string{"!note", "  Paragraph:text", "  !tip", "    CodeBlock", "  Paragraph:more", "Paragraph:after"},
+		},
+		{
 			name:   "a run too short for the one opened above it",
 			source: "!!! note \"outer\"\na\n!!!! tip \"inner\"\nb\n!!!\nafter\n",
 			want:   []string{"!note", "  Paragraph:a", "  !tip", "  Paragraph:b", "Paragraph:after"},
@@ -588,6 +677,7 @@ func TestAdmonitionStrandedBodyIsRecorded(t *testing.T) {
 		{name: "closed by a run", source: "!!! note\nbody\n!!!\nafter\n"},
 		{name: "a run straight after it", source: "!!! note\n!!!\nafter\n"},
 		{name: "a line indented less than it", source: "  !!! note\nbody\n"},
+		{name: "a line that goes on what the opening line left in it", source: "!!! note {no attributes\nbody\n"},
 	}
 
 	for _, tt := range tests {

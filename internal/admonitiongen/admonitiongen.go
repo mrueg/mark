@@ -72,8 +72,11 @@ type Options struct {
 	Containers bool
 
 	// Lazy lets a paragraph go on in a line without the indentation or the
-	// markers of what it is in.
-	Lazy bool
+	// markers of what it is in. Without LazyDeep it does so only where each
+	// admonition the line falls out of holds the paragraph itself, or holds
+	// the list item or the indented body the paragraph is in.
+	Lazy     bool
+	LazyDeep bool
 
 	// Indents lets an opening line be indented one to three columns, as a
 	// code fence or an HTML block always may be.
@@ -92,7 +95,7 @@ type Options struct {
 func All() Options {
 	return Options{
 		Bodiless: true, Unindented: true, Runless: true, Runs: true, Literal: true, Unclosed: true, DivRuns: true,
-		Containers: true, Lazy: true, Indents: true, Ragged: true,
+		Containers: true, Lazy: true, LazyDeep: true, Indents: true, Ragged: true,
 	}
 }
 
@@ -155,8 +158,16 @@ type place struct {
 
 	depth int
 
-	// opened is whether an admonition was opened at this level.
+	// opened is whether an admonition was opened at this level, nested
+	// whether one or a list item or blockquote was written here, and quote
+	// whether the place is a blockquote.
 	opened bool
+	nested bool
+	quote  bool
+
+	// literal is whether a code or HTML block was written here or in a
+	// place in this one.
+	literal bool
 
 	// exact is whether the next line here would be ragged if it were
 	// indented any further: the first line of a body, and the line after an
@@ -299,7 +310,9 @@ func (g *generator) block(p *place) {
 }
 
 func (g *generator) paragraph(p *place) {
-	if g.text != nil && g.text != p && !g.o.Lazy {
+	// Straight after a line of a paragraph written elsewhere, this one
+	// would go on that one lazily.
+	if lazy := g.o.Lazy && (g.o.LazyDeep || g.text.near(p)); g.text != nil && g.text != p && !lazy {
 		g.blank(p)
 	}
 
@@ -326,7 +339,7 @@ func (g *generator) shorter(p *place) []string {
 
 	own := p.rest()
 	for up := p.parent; up != nil; up = up.parent {
-		if lead := up.rest(); lead != own && !slices.Contains(found, lead) {
+		if lead := up.rest(); lead != own && !slices.Contains(found, lead) && (g.o.LazyDeep || p.near(up)) {
 			found = append(found, lead)
 		}
 	}
@@ -334,7 +347,35 @@ func (g *generator) shorter(p *place) []string {
 	return found
 }
 
+// near reports whether up is p or a place around it, and each place from p
+// up to it where an admonition may be open has p in it directly, as a list
+// item or an indented body with nothing in it but text, and no code or HTML
+// block anywhere in it.
+func (p *place) near(up *place) bool {
+	for at := p; at != nil; at = at.parent {
+		if at.opened && (at.literal || (at != p && (at != p.parent || p.quote || p.nested))) {
+			return false
+		}
+
+		if at == up {
+			return true
+		}
+	}
+
+	return false
+}
+
+// holdsLiteral marks p and the places around it as holding a code or HTML
+// block.
+func (p *place) holdsLiteral() {
+	for ; p != nil; p = p.parent {
+		p.literal = true
+	}
+}
+
 func (g *generator) admonition(p *place) {
+	p.nested = true
+
 	level := p
 	if g.o.Indents {
 		if indent := g.indent(p, "", "", "", "", "", " ", "  ", "   "); indent != "" {
@@ -422,6 +463,8 @@ func (g *generator) pickInt(choices ...int) int {
 }
 
 func (g *generator) fence(p *place) {
+	p.holdsLiteral()
+
 	indent := g.indent(p, "", "", "", " ", "  ", "   ")
 	char := g.pick("`", "~")
 	fence := strings.Repeat(char, 3+g.r.Intn(3))
@@ -492,6 +535,8 @@ var htmlBlocks = [][]string{
 }
 
 func (g *generator) html(p *place) {
+	p.holdsLiteral()
+
 	kind := g.r.Intn(len(htmlBlocks))
 	block := htmlBlocks[kind]
 	untilBlank := kind >= len(htmlBlocks)-2
@@ -522,8 +567,16 @@ func (g *generator) html(p *place) {
 }
 
 func (g *generator) container(p *place) {
+	p.nested = true
+
 	if g.r.Intn(2) == 0 {
+		// Straight after another, a blockquote would be the same one.
+		if n := len(g.lines); n > 0 && strings.HasPrefix(g.lines[n-1], p.rest()+">") {
+			g.blank(p)
+		}
+
 		quote := p.inside("> ")
+		quote.quote = true
 		quote.depth++
 		g.blocks(quote, 1+g.r.Intn(3))
 

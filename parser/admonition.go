@@ -355,8 +355,9 @@ func (b *admonitionParser) Continue(node ast.Node, reader text.Reader, pc parser
 			// Straight after the opening line, the line was written as the
 			// admonition's body, and its author is told that it is not. After
 			// a blank line it is what follows an admonition with no body, the
-			// way MkDocs writes one.
-			if !state.gap {
+			// way MkDocs writes one. Where the opening line left a paragraph
+			// of its own in the admonition, the line may go on that one.
+			if !state.gap && !node.HasChildren() {
 				parsenote.StrandedBody(pc, node.Pos())
 			}
 
@@ -469,8 +470,11 @@ type closingRuns struct {
 
 	// ends tells, by where its first body line starts, where the closing run
 	// of an admonition ends, or -1, so that a document of admonitions is not
-	// read to its last run once for each.
-	ends map[int]int
+	// read to its last run once for each. guessed are the ones among them
+	// read from an opening line that goldmark may not read as one, and read
+	// again from one it does.
+	ends    map[int]int
+	guessed map[int]bool
 
 	// blocks is a context with no block open, to ask goldmark's parsers what
 	// a line starts.
@@ -490,7 +494,7 @@ func documentClosingRuns(pc parser.Context, source []byte) *closingRuns {
 		return runs
 	}
 
-	runs := &closingRuns{last: -1, ends: map[int]int{}, blocks: parser.NewContext()}
+	runs := &closingRuns{last: -1, ends: map[int]int{}, guessed: map[int]bool{}, blocks: parser.NewContext()}
 
 	for start := 0; start < len(source); {
 		end := lineEnd(source, start)
@@ -568,10 +572,11 @@ func closingRunAhead(reader text.Reader, pc parser.Context, indent int, length i
 		source: source,
 		prefix: prefix,
 		indent: indent,
+		marker: '!',
 		runs:   documentClosingRuns(pc, source),
 	}
 
-	return body.closingRun(start, length)
+	return body.closingRun(start, length, true)
 }
 
 // bodyLines reads the lines of a body that is level with its opening line,
@@ -588,25 +593,229 @@ type bodyLines struct {
 	// indent is the indentation of the opening line.
 	indent int
 
+	// marker is the character an opening or closing run is made of.
+	marker byte
+
 	runs *closingRuns
+}
+
+// paragraph is what the look-ahead knows about a paragraph being the
+// innermost block open after a line. Only then does the next line go on it
+// lazily, whatever indentation or quote marker that line lacks.
+type paragraph int8
+
+const (
+	// paragraphUnknown is a line the look-ahead cannot tell about.
+	paragraphUnknown paragraph = iota
+
+	paragraphOpen
+	paragraphClosed
+
+	// paragraphHidden is a line of a body the look-ahead passes over, after
+	// one that may have opened a code or HTML block there: it stays unknown
+	// until that body ends.
+	paragraphHidden
+)
+
+// after returns what is known once line is read, a line without its
+// indentation where p was known before it, and whether the line is plain
+// text: one that goes on an open paragraph, and opens one otherwise. Where it
+// cannot tell it says unknown, which keeps the admonition from running on.
+func (b *bodyLines) after(line []byte, p paragraph) (after paragraph, plain bool) {
+	run := runLength(line)
+	bare := util.IsBlank(line[run:])
+
+	switch c := line[0]; {
+	case c == '#':
+		if run <= 6 && (bare || util.IsSpace(line[run])) {
+			return paragraphClosed, false
+		}
+	case c == '>':
+		// What is open in a blockquote is not followed.
+		return paragraphUnknown, false
+	case c == '`' || c == '~':
+		if run >= 3 {
+			return paragraphHidden, false
+		}
+	case c == '<':
+		switch kind := htmlBlockStart(line, b.runs.blocks); {
+		case kind == ast.HTMLBlockKind7 && p == paragraphOpen:
+		case kind != 0:
+			return paragraphHidden, false
+		}
+	case c == b.marker:
+		if run >= 3 && bare {
+			return paragraphUnknown, false
+		} else if run >= 3 {
+			return paragraphClosed, false
+		}
+	case c == '=' || c == '_' || c == ':' || c == '$' || c == '\\' || bytes.HasPrefix(line, []byte("[^")):
+		// A setext underline, a thematic break, or what an extension may
+		// take: a definition, a footnote, a formula.
+		if c != '_' || isRule(line) {
+			return paragraphUnknown, false
+		}
+	default:
+		if _, text, ok := listItem(line); ok {
+			if text != nil {
+				after, _ = b.after(text, paragraphClosed)
+
+				return after, false
+			}
+
+			return paragraphUnknown, false
+		} else if isRule(line) || (c == '-' && bare) {
+			return paragraphUnknown, false
+		}
+	}
+
+	return paragraphOpen, true
+}
+
+// mayOpenLiteral reports whether line, or what the list items and blockquotes
+// it opens hold of it, could open a code or HTML block: whether it starts
+// with a tag or a code fence behind their markers, however far it is indented
+// there.
+func mayOpenLiteral(line []byte) bool {
+	for {
+		line = bytes.TrimLeft(line, " \t")
+
+		marker := 0
+		for marker < len(line) && marker < 9 && util.IsNumeric(line[marker]) {
+			marker++
+		}
+
+		switch {
+		case len(line) == 0:
+			return false
+		case line[0] == '>':
+			line = line[1:]
+		case marker > 0 && marker < len(line) && (line[marker] == '.' || line[marker] == ')'):
+			line = line[marker+1:]
+		case marker == 0 && len(line) > 1 && bytes.IndexByte([]byte("-+*"), line[0]) >= 0 && util.IsSpace(line[1]):
+			line = line[1:]
+		default:
+			return line[0] == '<' || ((line[0] == '`' || line[0] == '~') && runLength(line) >= 3)
+		}
+	}
+}
+
+// isRule reports whether line is a thematic break: three or more of one
+// character and nothing else but blanks.
+func isRule(line []byte) bool {
+	rule := bytes.Join(bytes.Fields(line), nil)
+
+	return len(rule) >= 3 && strings.IndexByte("-*_", rule[0]) >= 0 && runLength(rule) == len(rule)
+}
+
+// lazy reports whether line, a line that the list item or blockquote around
+// the body does not hold, or that is indented less than the opening line,
+// goes on the paragraph open before it, which keeps everything around that
+// paragraph open.
+func (b *bodyLines) lazy(line []byte, p paragraph) bool {
+	if p != paragraphOpen || util.IsBlank(line) {
+		return false
+	}
+
+	// A run of the marker alone opens nothing, and where it cannot close
+	// anything either it is text.
+	line = bytes.TrimLeft(line, " \t")
+	if run := runLength(line); line[0] == b.marker && util.IsBlank(line[run:]) {
+		return true
+	}
+
+	_, plain := b.after(line, p)
+
+	return plain
 }
 
 // closingRun returns where the closing run of an admonition ends, or -1 when
 // it has none: the admonition opened by a run of length '!' whose body
 // starts on the line at start.
-func (b *bodyLines) closingRun(start int, length int) int {
-	if end, ok := b.runs.ends[start]; ok {
+func (b *bodyLines) closingRun(start int, length int, plain bool) int {
+	if end, ok := b.runs.ends[start]; ok && (!plain || !b.runs.guessed[start]) {
 		return end
 	}
 
 	b.runs.depth++
 	b.runs.deepest = max(b.runs.deepest, b.runs.depth)
 
-	end := b.findClosingRun(start, length)
+	end := b.findClosingRun(start, length, plain)
 	b.runs.ends[start] = end
+	b.runs.guessed[start] = !plain
 	b.runs.depth--
 
 	return end
+}
+
+// literal follows the code and HTML blocks of one body, whose text opens and
+// closes nothing.
+type literal struct {
+	// fence and fenceLength are the fence of the code block the last line
+	// was in, and html the kind of the HTML block it was in when that is one
+	// that runs on over blank lines.
+	fence       byte
+	fenceLength int
+	html        ast.HTMLBlockKind
+
+	// markup is whether the last line was in an HTML block that ends at a
+	// blank line, such as a <div>: an opening line there opens nothing,
+	// while a run still closes. soft is whether the code or HTML block the
+	// last line was in started in such a block, of which it is text, and so
+	// ends with it.
+	markup, soft bool
+}
+
+// blank reads a blank line.
+func (l *literal) blank() {
+	if l.markup = false; l.soft {
+		l.soft, l.html, l.fenceLength = false, 0, 0
+	}
+}
+
+// holds reports whether line is text of the code or HTML block open before
+// it, the line that closes the block included. line starts with a run of run
+// bytes, which bare says is all of it, and is indented beyond columns further
+// than the body.
+func (l *literal) holds(line []byte, run int, bare bool, beyond int) bool {
+	switch {
+	case l.html != 0:
+		if htmlblock.Closes(l.html, line) {
+			l.html = 0
+		}
+	case l.fenceLength > 0:
+		if line[0] == l.fence && run >= l.fenceLength && bare && beyond <= 3 {
+			l.fenceLength = 0
+		}
+	default:
+		return false
+	}
+
+	return true
+}
+
+// opens reports whether line opens a code or HTML block. kind is the HTML
+// block it starts where no paragraph is open, and noParagraph whether none is
+// known to be: a block of the last kind cannot interrupt one.
+func (l *literal) opens(line []byte, run int, kind ast.HTMLBlockKind, noParagraph bool) bool {
+	switch {
+	case (line[0] == '`' || line[0] == '~') && run >= 3 && (line[0] == '~' || bytes.IndexByte(line[run:], '`') < 0):
+		l.fence, l.fenceLength, l.soft = line[0], run, l.markup
+	case kind >= ast.HTMLBlockKind6:
+		if l.markup || (kind == ast.HTMLBlockKind7 && !noParagraph) {
+			return false
+		}
+
+		l.markup = true
+	case kind != 0:
+		if !htmlblock.Closes(kind, line) {
+			l.html, l.soft = kind, l.markup
+		}
+	default:
+		return false
+	}
+
+	return true
 }
 
 // findClosingRun reads on from start for the run that closes an admonition
@@ -617,31 +826,44 @@ func (b *bodyLines) closingRun(start int, length int) int {
 // run straight after an indented one that was opened by a shorter run than
 // this admonition closes this one instead when no later run does: it is
 // longer than that one asks for.
-func (b *bodyLines) findClosingRun(start int, length int) int {
+//
+// A line that goes on a paragraph lazily ends nothing: not the list item or
+// blockquote whose indentation or marker it lacks, not this admonition when
+// it is indented less, and not the indented body it is level with, which the
+// next indented line then continues. plain is whether no line since the
+// opening line that goldmark read could open a code or HTML block: where one
+// may be open that the columns read here do not show, in a body this one
+// holds, a line that looks like text may be its text, and none is taken to
+// go on a paragraph.
+func (b *bodyLines) findClosingRun(start int, length int, plain bool) int {
 	var (
 		// opened is the opening run of an admonition whose body has not
 		// started, and indented that of one whose indented body the last
-		// line was in.
-		opened   int
-		indented int
+		// line was in, which bodyIndent is the indentation of. resume is
+		// that of one whose indented body a lazy line left open. at is the
+		// indentation of that admonition's opening line, which is this
+		// one's or up to three columns more.
+		opened     int
+		indented   int
+		bodyIndent int
+		resume     int
+		at         int
 
 		// item is how far the content of the list item the last line was in
 		// is indented, and 0 outside one.
 		item int
 
-		fence       byte
-		fenceLength int
-		html        ast.HTMLBlockKind
+		// here follows the code and HTML blocks of this body.
+		here literal
 
-		// markup is whether the last line was in an HTML block that ends at
-		// a blank line, such as a <div>: an opening line there opens
-		// nothing, while a run still closes. soft is whether the code or
-		// HTML block the last line was in started in such a block, of which
-		// it is text, and so ends with it.
-		markup, soft bool
-
-		// blank is whether no line of text came since the last blank line.
-		blank = true
+		// text is whether a paragraph was open after the last line. The
+		// body starts after an opening line, which leaves none. nested is
+		// whether an admonition was opened here by a line indented further
+		// than this one and has no indented body: the lines after it are
+		// read by its indentation, which is not followed, until a line here
+		// ends it.
+		text   = paragraphClosed
+		nested bool
 
 		// spare is where the last run ends that closed an admonition opened
 		// by a shorter run than this one and is long enough for this one, or
@@ -656,63 +878,84 @@ func (b *bodyLines) findClosingRun(start int, length int) int {
 
 		line, ok := withoutContainerPrefix(untabbed(b.source[lineStart:start]), b.prefix)
 		if !ok {
+			if plain && b.lazy(line, text) {
+				continue
+			}
+
 			return spare
 		}
 
 		if util.IsBlank(line) {
-			if blank, markup = true, false; soft {
-				soft, html, fenceLength = false, 0, 0
+			if here.blank(); text != paragraphHidden {
+				text = paragraphClosed
 			}
 
 			continue
 		}
 
-		afterBlank := blank
-		blank = false
-
 		w, pos := util.IndentWidth(line, 0)
 		if w < b.indent {
+			if plain && b.lazy(line, text) {
+				continue
+			}
+
 			return spare
 		}
 
 		line = line[pos:]
-
-		if html != 0 {
-			if htmlblock.Closes(html, line) {
-				html = 0
-			}
-
-			continue
-		}
-
 		run := runLength(line)
 		bare := util.IsBlank(line[run:])
 
-		if fenceLength > 0 {
-			if line[0] == fence && run >= fenceLength && bare && w <= b.indent+3 {
-				fenceLength = 0
-			}
+		if plain && mayOpenLiteral(line) {
+			plain = false
+		}
 
+		if here.holds(line, run, bare, w-b.indent) {
 			continue
 		}
 
 		deeper := w > b.indent
-		if deeper && opened > 0 {
-			indented, opened = opened, 0
+
+		switch {
+		case opened > 0 && w > at:
+			indented, opened, bodyIndent = opened, 0, w
+		case opened > 0 && at > b.indent:
+			opened, nested = 0, true
+		case resume > 0 && w > at:
+			indented, resume = resume, 0
 		}
 
 		// A line in an indented body, a list item or an indented code block
 		// neither opens nor closes anything here. Any other line up to three
 		// columns in can still open a code block or an HTML block.
-		if deeper && (indented > 0 || (item > 0 && w-b.indent >= item) || w > b.indent+3) {
+		if beyond := b.beyond(w, indented > 0 && w > at, bodyIndent, item); beyond >= 0 {
+			text = b.passed(line, run, beyond, text)
+
 			continue
 		}
 
-		if item = listItemContent(line); item > 0 {
-			item += w - b.indent
+		after, isText := b.after(line, text)
+
+		// A line of text no deeper than the opening line of an indented body
+		// goes on the paragraph that body ended in, and the body is still
+		// open.
+		lazy := plain && isText && text == paragraphOpen
+
+		switch {
+		case lazy && indented > 0:
+			resume = indented
+		case !lazy:
+			resume = 0
 		}
 
-		above := indented
+		// A run closes the admonition whose indented body it comes straight
+		// after when it is level with that one's opening line, which only
+		// one opened level with this one is here.
+		above := 0
+		if at == b.indent {
+			above = indented
+		}
+
 		indented = 0
 
 		if opened > 0 {
@@ -724,8 +967,8 @@ func (b *bodyLines) findClosingRun(start int, length int) int {
 			// opening line, and neither does this one have a run when it
 			// needs one as long. A list item its body opened with ended with
 			// it.
-			if end := b.closingRun(lineStart, nested); end >= 0 {
-				start, item = end, 0
+			if end := b.closingRun(lineStart, nested, plain); end >= 0 {
+				start, item, text = end, 0, paragraphClosed
 
 				continue
 			} else if length >= nested {
@@ -733,24 +976,39 @@ func (b *bodyLines) findClosingRun(start int, length int) int {
 			}
 		}
 
-		kind := htmlBlockStart(line, b.runs.blocks)
+		noParagraph := text == paragraphClosed
+		text = after
+
+		if !lazy {
+			if item, _, _ = listItem(line); item > 0 {
+				item += w - b.indent
+			}
+		}
+
+		switch kind := htmlBlockStart(line, b.runs.blocks); {
+		case here.opens(line, run, kind, noParagraph):
+			text = paragraphClosed
+
+			continue
+		case here.markup:
+			text = paragraphClosed
+		case text == paragraphHidden:
+			// Not a block after all: a tag in a paragraph that may be open,
+			// or code quoted in one.
+			text = paragraphUnknown
+		}
+
+		if nested = nested && (deeper || lazy); nested {
+			text = paragraphUnknown
+		}
 
 		switch {
-		case (line[0] == '`' || line[0] == '~') && run >= 3 && (line[0] == '~' || bytes.IndexByte(line[run:], '`') < 0):
-			fence, fenceLength, soft = line[0], run, markup
-		case kind >= ast.HTMLBlockKind6:
-			// One of the last kind cannot interrupt a paragraph, and only
-			// after a blank line is none known to be open.
-			markup = markup || kind == ast.HTMLBlockKind6 || afterBlank
-		case kind != 0:
-			if !htmlblock.Closes(kind, line) {
-				html, soft = kind, markup
-			}
-		case deeper || line[0] != '!' || run < 3:
+		case line[0] != b.marker || run < 3:
 		case !bare:
-			if !markup {
-				opened = run
+			if !here.markup {
+				opened, at = run, w
 			}
+		case deeper:
 		case above > 0 && run >= above:
 			// It closes the admonition with the indented body above it,
 			// unless it turns out to be the last run this one could have.
@@ -763,6 +1021,52 @@ func (b *bodyLines) findClosingRun(start int, length int) int {
 	}
 
 	return spare
+}
+
+// beyond returns how many columns a line indented w columns is indented
+// beyond the content of what holds it, where the look-ahead passes over that:
+// the indented body of an admonition opened here, when indented says the line
+// is in one, whose first line is indented bodyIndent columns, a list item
+// whose content is item columns in, or an indented code block. It returns -1
+// for a line the look-ahead reads.
+func (b *bodyLines) beyond(w int, indented bool, bodyIndent int, item int) int {
+	switch {
+	case indented:
+		return max(0, w-bodyIndent)
+	case item > 0 && w-b.indent >= item:
+		return w - b.indent - item
+	case w > b.indent+3:
+		return w - b.indent
+	}
+
+	return -1
+}
+
+// passed reads a line of a body the look-ahead passes over, one starting
+// with a run of run bytes and indented beyond columns further than that body,
+// for whether a paragraph is open after it, where p says whether one was
+// before it.
+func (b *bodyLines) passed(line []byte, run int, beyond int, p paragraph) paragraph {
+	// A list item, a blockquote or an admonition opened there holds lines of
+	// its own, by its own indentation.
+	_, _, item := listItem(line)
+	if p == paragraphHidden || item || line[0] == '>' || (line[0] == b.marker && run >= 3 && !util.IsBlank(line[run:])) {
+		return paragraphHidden
+	}
+
+	after, isText := b.after(line, p)
+
+	switch {
+	case isText && beyond > 3 && p != paragraphOpen:
+		// Indented further than code is, the line is text of an open
+		// paragraph only. Where none is open it is code, or a line of a body
+		// further in.
+		return paragraphHidden
+	case after == paragraphHidden:
+		return paragraphUnknown
+	}
+
+	return after
 }
 
 // untabbed returns line with each tab among its quote markers and indentation
@@ -790,17 +1094,17 @@ func untabbed(line []byte) []byte {
 	return append(spaced, line[lead:]...)
 }
 
-// listItemContent returns how many columns into line the content of the list
-// item it starts is, and 0 for a line that starts none.
-func listItemContent(line []byte) int {
+// listItem reports whether line starts a list item, and how many columns into
+// the line the item's content is. text is what the item starts with, and nil
+// for an item that starts with nothing or with indented code.
+func listItem(line []byte) (content int, text []byte, ok bool) {
 	marker := 0
 
 	switch line[0] {
 	case '-', '+', '*':
 		// "* * *" is a thematic break.
-		rule := bytes.Join(bytes.Fields(line), nil)
-		if len(rule) >= 3 && runLength(rule) == len(rule) {
-			return 0
+		if isRule(line) {
+			return 0, nil, false
 		}
 
 		marker = 1
@@ -810,7 +1114,7 @@ func listItemContent(line []byte) int {
 		}
 
 		if marker == 0 || marker == len(line) || (line[marker] != '.' && line[marker] != ')') {
-			return 0
+			return 0, nil, false
 		}
 
 		marker++
@@ -818,20 +1122,20 @@ func listItemContent(line []byte) int {
 
 	rest := line[marker:]
 	if util.IsBlank(rest) {
-		return marker + 1
+		return marker + 1, nil, true
 	}
 
-	blanks, _ := util.IndentWidth(rest, marker)
+	blanks, pos := util.IndentWidth(rest, marker)
 	if blanks == 0 {
-		return 0
+		return 0, nil, false
 	}
 
 	// More than four columns of blanks start the item with indented code.
 	if blanks > 4 {
-		blanks = 1
+		return marker + 1, nil, true
 	}
 
-	return marker + blanks
+	return marker + blanks, rest[pos:], true
 }
 
 // attributesEndLine reports whether an attribute block in goldmark v1's

@@ -446,8 +446,9 @@ func FuzzAdmonitionDocuments(f *testing.F) {
 // documents by admonitiongen, each tree by parsing its document with the
 // parser of the commit the change was made on. Of the lazy ones, those are
 // left out where a closing run follows lines level with an indented body
-// inside the admonition: that run now closes the admonition, and used to
-// close the body inside it and leave the admonition open to the end.
+// inside the admonition: that run closes the admonition, where the recorded
+// reading has it close the body inside and leave the admonition open to the
+// end.
 func TestAdmonitionsReadAsBefore(t *testing.T) {
 	data, err := os.ReadFile("testdata/admonition-master.json")
 	require.NoError(t, err)

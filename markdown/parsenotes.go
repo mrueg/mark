@@ -35,8 +35,8 @@ const openingLineLimit = 60
 // warnStrandedBodies tells the author of each admonition that is published
 // without the lines written as its body: those that follow its opening line
 // directly, are not indented under it, and are not ended by a closing line.
-// They used to be published in the box whenever the document, list item or
-// blockquote ended with them, so a page can change without its source having.
+// The page shows them under the box and nothing on it says why, so the
+// warning names the line and what keeps them in the box.
 //
 // compiled is the text that was parsed, which at holds offsets into, and
 // written the text CompileMarkdown was given, whose lines the warnings name.

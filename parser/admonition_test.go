@@ -514,6 +514,17 @@ func TestAdmonitionBodyIsIndentedOrClosed(t *testing.T) {
 			want:   []string{"!note", "  Paragraph:text", "  !tip", "    CodeBlock", "  Paragraph:more", "Paragraph:after"},
 		},
 		{
+			// What the look-ahead takes for a comment left open after the
+			// first says nothing about the instruction after the second,
+			// which is closed.
+			name:   "a block of one kind left open, then one of another kind that is closed",
+			source: "!!! note \"one\"\n> # h\n<span>\n<!--\n</span>\n\n!!! tip \"two\"\n> # h\n<span>\n<?x\n</span>\n\n?>\n!!!\nafter\n",
+			want: []string{
+				"!note", "Blockquote", "  Heading:h", "HTMLBlock", "!tip", "  Blockquote", "    Heading:h", "  HTMLBlock",
+				"  Paragraph:?>", "Paragraph:after",
+			},
+		},
+		{
 			name:   "a run too short for the one opened above it",
 			source: "!!! note \"outer\"\na\n!!!! tip \"inner\"\nb\n!!!\nafter\n",
 			want:   []string{"!note", "  Paragraph:a", "  !tip", "  Paragraph:b", "Paragraph:after"},

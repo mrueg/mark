@@ -1,11 +1,14 @@
 package parser_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math/rand"
 	"os"
+	"os/exec"
 	"regexp"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"testing"
@@ -134,16 +137,16 @@ func (r reading) lookAheadAgrees() error {
 		}
 
 		ahead := cparser.LookAheadOf(admonition)
-		line := 1 + strings.Count(string(r.source[:admonition.Pos()]), "\n")
 
 		switch {
 		case !ahead.Asked:
 		case ahead.RunEnd < 0 && (ahead.ClosedAt != 0 || r.holdsLaterLines(admonition)):
-			return ast.WalkStop, fmt.Errorf("line %d: no closing run was found ahead, and the admonition has a body", line)
+			return ast.WalkStop, fmt.Errorf(
+				"line %d: no closing run was found ahead, and the admonition has a body", r.lineOf(admonition.Pos())+1)
 		case ahead.RunEnd >= 0 && !closedBy(admonition, ahead.RunEnd):
 			return ast.WalkStop, fmt.Errorf(
 				"line %d: kept open for the closing run that ends at byte %d, and closed at byte %d (0: by no run)",
-				line, ahead.RunEnd, ahead.ClosedAt)
+				r.lineOf(admonition.Pos())+1, ahead.RunEnd, ahead.ClosedAt)
 		}
 
 		return ast.WalkContinue, nil
@@ -156,7 +159,7 @@ func (r reading) lookAheadAgrees() error {
 // as any paragraph does.
 func (r reading) holdsLaterLines(admonition *cparser.Admonition) bool {
 	for child := admonition.FirstChild(); child != nil; child = child.NextSibling() {
-		if r.lineOf(child.Pos()) != r.lineOf(admonition.Pos()) {
+		if bytes.IndexByte(r.source[admonition.Pos():max(admonition.Pos(), child.Pos())], '\n') >= 0 {
 			return true
 		}
 	}
@@ -184,7 +187,7 @@ func closedBy(node ast.Node, end int) bool {
 
 // lineOf returns the number of the line that holds byte at, counting from 0.
 func (r reading) lineOf(at int) int {
-	return strings.Count(string(r.source[:at]), "\n")
+	return bytes.Count(r.source[:at], []byte("\n"))
 }
 
 // column returns the column of byte at in its line, a tab reaching to the
@@ -467,8 +470,10 @@ func TestAdmonitionsReadAsBefore(t *testing.T) {
 
 // TestAdmonitionLookAheadReadsEachLineOnce: a page of admonitions that end
 // at their opening lines is read ahead once, not to its last closing run for
-// each of them, whatever keeps each from that run. The lines read are
-// counted, since a clock says as much about the machine as about the parser.
+// each of them, whatever keeps each from that run: the admonition after it,
+// or a code or HTML block the look-ahead takes for one left open, or for one
+// closed at the end of the page. The lines read are counted, since a clock
+// says as much about the machine as about the parser.
 func TestAdmonitionLookAheadReadsEachLineOnce(t *testing.T) {
 	const count = 2000
 
@@ -479,12 +484,60 @@ func TestAdmonitionLookAheadReadsEachLineOnce(t *testing.T) {
 		"longer and shorter runs": strings.Repeat("!!! a\ntext\n!!!! a\ntext\n", count) + "!!!\n",
 		"each closed":             strings.Repeat("!!! a\ntext\n!!!\n", count),
 		"each in a list item":     strings.Repeat("- !!! a\n  text\n", count) + "- !!!\n",
+
+		// The comment and the fence are text of the block the <div> opens,
+		// which ends at the blank line.
+		"an unclosed comment in a div": strings.Repeat("!!! a\ntext\n<div>\n<!--\n</div>\n\n", count) + "!!!\n",
+		"a code fence in a div":        strings.Repeat("!!! a\ntext\n<div>\n```\n</div>\n\n", count) + "!!!\n",
+
+		// After a blockquote the look-ahead does not know whether a
+		// paragraph is open, nor so whether the tag opens a block that the
+		// comment or the fence is text of.
+		"an unclosed comment after a tag": strings.Repeat("!!! a\n> # h\n<span>\n<!--\n</span>\n\n", count) + "!!!\n",
+		"a comment closed at the end":     strings.Repeat("!!! a\n> # h\n<span>\n<!--\n</span>\n\n", count) + "!!!\n-->\n",
+		"a code fence after a tag":        strings.Repeat("!!! a\n> # h\n<span>\n```\n</span>\n\n", count) + "!!!\n",
+		"an unclosed fence after a tag":   strings.Repeat("!!! a\n> # h\n<span>\n~~~~\n</span>\n\n", count) + "```\n!!!\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := readAdmonitions(document)
 
 			require.NoError(t, r.lookAheadAgrees())
-			assert.LessOrEqual(t, r.work.Visits, 2*strings.Count(document, "\n"))
+			assert.LessOrEqual(t, r.work.Visits, 6*strings.Count(document, "\n"))
 		})
 	}
+}
+
+// lookAheadChild is set in the environment of the test binary that
+// TestAdmonitionLookAheadDoesNotRecurse runs itself as.
+const lookAheadChild = "MARK_TEST_ADMONITION_LOOK_AHEAD_CHILD"
+
+// TestAdmonitionLookAheadDoesNotRecurse: each admonition of a page of them,
+// opened one straight after another, waits for the closing run of the next.
+// They wait in a list, not each in a call of its own, so the page is read on
+// a stack too small to hold a call for each. A stack that is outgrown ends
+// the process, so the page is read in one this test starts.
+func TestAdmonitionLookAheadDoesNotRecurse(t *testing.T) {
+	const count = 20000
+
+	document := strings.Repeat("!!! a\ntext\n", count) + "!!!\n"
+
+	if os.Getenv(lookAheadChild) != "" {
+		debug.SetMaxStack(1 << 20)
+
+		r := readAdmonitions(document)
+		require.NoError(t, r.lookAheadAgrees())
+		require.Equal(t, count-1, r.work.Waiting)
+
+		blocks := r.tree()
+		require.Len(t, blocks, 2*count)
+		require.Equal(t, []string{"Admonition!a ", "Paragraph ", "Admonition!a ", "  Paragraph "}, blocks[len(blocks)-4:])
+
+		return
+	}
+
+	child := exec.Command(os.Args[0], "-test.run=^TestAdmonitionLookAheadDoesNotRecurse$", "-test.count=1")
+	child.Env = append(os.Environ(), lookAheadChild+"=1")
+
+	out, err := child.CombinedOutput()
+	require.NoError(t, err, "%s", out)
 }

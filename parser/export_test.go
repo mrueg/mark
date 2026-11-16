@@ -31,8 +31,9 @@ type LookAheadWork struct {
 	// is read.
 	Visits int
 
-	// Depth is how many admonitions deep the reading went at most.
-	Depth int
+	// Waiting is the most bodies that waited at once for the closing run of
+	// an admonition opened in them to be read.
+	Waiting int
 }
 
 // LookAheadWorkOf returns how much the parse that pc belongs to read ahead.
@@ -42,5 +43,5 @@ func LookAheadWorkOf(pc parser.Context) LookAheadWork {
 		return LookAheadWork{}
 	}
 
-	return LookAheadWork{Visits: runs.visits, Depth: runs.deepest}
+	return LookAheadWork{Visits: runs.visits, Waiting: runs.deepest}
 }
